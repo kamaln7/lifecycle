@@ -8,13 +8,17 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/buildpacks/lifecycle"
+
+	"github.com/buildpacks/lifecycle/buildpack"
+	"github.com/buildpacks/lifecycle/errors"
+
 	"github.com/apex/log"
 	"github.com/apex/log/handlers/memory"
 	"github.com/google/go-cmp/cmp"
 	"github.com/sclevine/spec"
 	"github.com/sclevine/spec/report"
 
-	"github.com/buildpacks/lifecycle"
 	h "github.com/buildpacks/lifecycle/testhelpers"
 )
 
@@ -24,7 +28,7 @@ func TestDetector(t *testing.T) {
 
 func testDetector(t *testing.T, when spec.G, it spec.S) {
 	var (
-		config      *lifecycle.DetectConfig
+		detector    *lifecycle.Detector
 		platformDir string
 		tmpDir      string
 		logHandler  *memory.Handler
@@ -43,13 +47,15 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 		buildpacksDir := filepath.Join("testdata", "by-id")
 
 		logHandler = memory.New()
-		config = &lifecycle.DetectConfig{
-			FullEnv:       append(os.Environ(), "ENV_TYPE=full"),
-			ClearEnv:      append(os.Environ(), "ENV_TYPE=clear"),
-			AppDir:        appDir,
-			PlatformDir:   platformDir,
-			BuildpacksDir: buildpacksDir,
-			Logger:        &log.Logger{Handler: logHandler},
+		detector = &lifecycle.Detector{
+			XConfig: buildpack.DetectConfig{
+				FullEnv:       append(os.Environ(), "ENV_TYPE=full"),
+				ClearEnv:      append(os.Environ(), "ENV_TYPE=clear"),
+				AppDir:        appDir,
+				PlatformDir:   platformDir,
+				BuildpacksDir: buildpacksDir,
+			},
+			XLogger: &log.Logger{Handler: logHandler},
 		}
 	})
 
@@ -60,28 +66,28 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 	mkappfile := func(data string, paths ...string) {
 		t.Helper()
 		for _, p := range paths {
-			h.Mkfile(t, data, filepath.Join(config.AppDir, p))
+			h.Mkfile(t, data, filepath.Join(detector.Config().AppDir, p))
 		}
 	}
 	toappfile := func(data string, paths ...string) {
 		t.Helper()
 		for _, p := range paths {
-			tofile(t, data, filepath.Join(config.AppDir, p))
+			tofile(t, data, filepath.Join(detector.Config().AppDir, p))
 		}
 	}
 	rdappfile := func(path string) string {
 		t.Helper()
-		return h.Rdfile(t, filepath.Join(config.AppDir, path))
+		return h.Rdfile(t, filepath.Join(detector.Config().AppDir, path))
 	}
 
 	when("#Detect", func() {
 		it("should expand order-containing buildpack IDs", func() {
 			mkappfile("100", "detect-status")
 
-			_, _, err := lifecycle.BuildpackOrder{
-				{Group: []lifecycle.GroupBuildpack{{ID: "E", Version: "v1"}}},
-			}.Detect(config)
-			if err, ok := err.(*lifecycle.Error); !ok || err.Type != lifecycle.ErrTypeFailedDetection {
+			_, _, err := buildpack.BuildpackOrder{
+				{Group: []buildpack.GroupBuildpack{{ID: "E", Version: "v1"}}},
+			}.Detect(detector)
+			if err, ok := err.(*errors.Error); !ok || err.Type != errors.ErrTypeFailedDetection {
 				t.Fatalf("Unexpected error:\n%s\n", err)
 			}
 
@@ -94,15 +100,15 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 			mkappfile("100", "detect-status")
 			mkappfile("0", "detect-status-A-v1", "detect-status-B-v1")
 
-			group, plan, err := lifecycle.BuildpackOrder{
-				{Group: []lifecycle.GroupBuildpack{{ID: "E", Version: "v1"}}},
-			}.Detect(config)
+			group, plan, err := buildpack.BuildpackOrder{
+				{Group: []buildpack.GroupBuildpack{{ID: "E", Version: "v1"}}},
+			}.Detect(detector)
 			if err != nil {
 				t.Fatalf("Unexpected error:\n%s\n", err)
 			}
 
-			if s := cmp.Diff(group, lifecycle.BuildpackGroup{
-				Group: []lifecycle.GroupBuildpack{
+			if s := cmp.Diff(group, buildpack.BuildpackGroup{
+				Group: []buildpack.GroupBuildpack{
 					{ID: "A", Version: "v1", API: "0.3", Homepage: "Buildpack A Homepage"},
 					{ID: "B", Version: "v1", API: "0.2"},
 				},
@@ -110,7 +116,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 				t.Fatalf("Unexpected group:\n%s\n", s)
 			}
 
-			if !hasEntries(plan.Entries, []lifecycle.BuildPlanEntry(nil)) {
+			if !hasEntries(plan.Entries, []buildpack.BuildPlanEntry(nil)) {
 				t.Fatalf("Unexpected entries:\n%+v\n", plan.Entries)
 			}
 
@@ -127,8 +133,8 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 		})
 
 		it("should fail if the group is empty", func() {
-			_, _, err := lifecycle.BuildpackOrder([]lifecycle.BuildpackGroup{{}}).Detect(config)
-			if err, ok := err.(*lifecycle.Error); !ok || err.Type != lifecycle.ErrTypeFailedDetection {
+			_, _, err := buildpack.BuildpackOrder([]buildpack.BuildpackGroup{{}}).Detect(detector)
+			if err, ok := err.(*errors.Error); !ok || err.Type != errors.ErrTypeFailedDetection {
 				t.Fatalf("Unexpected error:\n%s\n", err)
 			}
 
@@ -143,13 +149,13 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 
 		it("should fail if the group has no viable buildpacks, even if no required buildpacks fail", func() {
 			mkappfile("100", "detect-status")
-			_, _, err := lifecycle.BuildpackOrder{
-				{Group: []lifecycle.GroupBuildpack{
+			_, _, err := buildpack.BuildpackOrder{
+				{Group: []buildpack.GroupBuildpack{
 					{ID: "A", Version: "v1", Optional: true},
 					{ID: "B", Version: "v1", Optional: true},
 				}},
-			}.Detect(config)
-			if err, ok := err.(*lifecycle.Error); !ok || err.Type != lifecycle.ErrTypeFailedDetection {
+			}.Detect(detector)
+			if err, ok := err.(*errors.Error); !ok || err.Type != errors.ErrTypeFailedDetection {
 				t.Fatalf("Unexpected error:\n%s\n", err)
 			}
 
@@ -168,13 +174,13 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 			mkappfile("100", "detect-status")
 			mkappfile("0", "detect-status-A-v1")
 			mkappfile("127", "detect-status-B-v1")
-			_, _, err := lifecycle.BuildpackOrder{
-				{Group: []lifecycle.GroupBuildpack{
+			_, _, err := buildpack.BuildpackOrder{
+				{Group: []buildpack.GroupBuildpack{
 					{ID: "A", Version: "v1", Optional: false},
 					{ID: "B", Version: "v1", Optional: false},
 				}},
-			}.Detect(config)
-			if err, ok := err.(*lifecycle.Error); !ok || err.Type != lifecycle.ErrTypeBuildpack {
+			}.Detect(detector)
+			if err, ok := err.(*errors.Error); !ok || err.Type != errors.ErrTypeBuildpack {
 				t.Fatalf("Unexpected error:\n%s\n", err)
 			}
 
@@ -190,12 +196,12 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 		it("should select an appropriate env type", func() {
 			mkappfile("0", "detect-status-A-v1.clear", "detect-status-B-v1")
 
-			_, _, err := lifecycle.BuildpackOrder{{
-				Group: []lifecycle.GroupBuildpack{
+			_, _, err := buildpack.BuildpackOrder{{
+				Group: []buildpack.GroupBuildpack{
 					{ID: "A", Version: "v1.clear"},
 					{ID: "B", Version: "v1"},
 				},
-			}}.Detect(config)
+			}}.Detect(detector)
 			if err != nil {
 				t.Fatalf("Unexpected error:\n%s\n", err)
 			}
@@ -212,17 +218,17 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 		it("should set CNB_BUILDPACK_DIR in the environment", func() {
 			mkappfile("0", "detect-status-A-v1.clear", "detect-status-B-v1")
 
-			_, _, err := lifecycle.BuildpackOrder{{
-				Group: []lifecycle.GroupBuildpack{
+			_, _, err := buildpack.BuildpackOrder{{
+				Group: []buildpack.GroupBuildpack{
 					{ID: "A", Version: "v1.clear"},
 					{ID: "B", Version: "v2"},
 				},
-			}}.Detect(config)
+			}}.Detect(detector)
 			if err != nil {
 				t.Fatalf("Unexpected error:\n%s\n", err)
 			}
 
-			bpsDir, err := filepath.Abs(config.BuildpacksDir)
+			bpsDir, err := filepath.Abs(detector.Config().BuildpacksDir)
 			if err != nil {
 				t.Fatalf("Unexpected error:\n%s\n", err)
 			}
@@ -241,15 +247,15 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 			mkappfile("100", "detect-status")
 			mkappfile("0", "detect-status-A-v1")
 			mkappfile("100", "detect-status-B-v1")
-			config.Logger = &log.Logger{Handler: logHandler, Level: log.InfoLevel}
+			detector.XLogger = &log.Logger{Handler: logHandler, Level: log.InfoLevel}
 
-			_, _, err := lifecycle.BuildpackOrder{
-				{Group: []lifecycle.GroupBuildpack{
+			_, _, err := buildpack.BuildpackOrder{
+				{Group: []buildpack.GroupBuildpack{
 					{ID: "A", Version: "v1", Optional: false},
 					{ID: "B", Version: "v1", Optional: false},
 				}},
-			}.Detect(config)
-			if err, ok := err.(*lifecycle.Error); !ok || err.Type != lifecycle.ErrTypeFailedDetection {
+			}.Detect(detector)
+			if err, ok := err.(*errors.Error); !ok || err.Type != errors.ErrTypeFailedDetection {
 				t.Fatalf("Unexpected error:\n%s\n", err)
 			}
 
@@ -262,15 +268,15 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 			mkappfile("100", "detect-status")
 			mkappfile("0", "detect-status-A-v1")
 			mkappfile("127", "detect-status-B-v1")
-			config.Logger = &log.Logger{Handler: logHandler, Level: log.InfoLevel}
+			detector.XLogger = &log.Logger{Handler: logHandler, Level: log.InfoLevel}
 
-			_, _, err := lifecycle.BuildpackOrder{
-				{Group: []lifecycle.GroupBuildpack{
+			_, _, err := buildpack.BuildpackOrder{
+				{Group: []buildpack.GroupBuildpack{
 					{ID: "A", Version: "v1", Optional: false},
 					{ID: "B", Version: "v1", Optional: false},
 				}},
-			}.Detect(config)
-			if err, ok := err.(*lifecycle.Error); !ok || err.Type != lifecycle.ErrTypeBuildpack {
+			}.Detect(detector)
+			if err, ok := err.(*errors.Error); !ok || err.Type != errors.ErrTypeBuildpack {
 				t.Fatalf("Unexpected error:\n%s\n", err)
 			}
 
@@ -297,20 +303,20 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 				toappfile("\n[[requires]]\n name = \"dep2\"", "detect-plan-D-v2.toml", "detect-plan-B-v1.toml")
 				toappfile("\n[[requires]]\n name = \"dep2\"", "detect-plan-A-v1.toml")
 
-				group, plan, err := lifecycle.BuildpackOrder{
-					{Group: []lifecycle.GroupBuildpack{
+				group, plan, err := buildpack.BuildpackOrder{
+					{Group: []buildpack.GroupBuildpack{
 						{ID: "A", Version: "v1"},
 						{ID: "C", Version: "v2"},
 						{ID: "D", Version: "v2"},
 						{ID: "B", Version: "v1"},
 					}},
-				}.Detect(config)
+				}.Detect(detector)
 				if err != nil {
 					t.Fatalf("Unexpected error:\n%s\n", err)
 				}
 
-				if s := cmp.Diff(group, lifecycle.BuildpackGroup{
-					Group: []lifecycle.GroupBuildpack{
+				if s := cmp.Diff(group, buildpack.BuildpackGroup{
+					Group: []buildpack.GroupBuildpack{
 						{ID: "A", Version: "v1", API: "0.3", Homepage: "Buildpack A Homepage"},
 						{ID: "C", Version: "v2", API: "0.2"},
 						{ID: "D", Version: "v2", API: "0.2"},
@@ -320,21 +326,21 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 					t.Fatalf("Unexpected group:\n%s\n", s)
 				}
 
-				if !hasEntries(plan.Entries, []lifecycle.BuildPlanEntry{
+				if !hasEntries(plan.Entries, []buildpack.BuildPlanEntry{
 					{
-						Providers: []lifecycle.GroupBuildpack{
+						Providers: []buildpack.GroupBuildpack{
 							{ID: "A", Version: "v1"},
 							{ID: "C", Version: "v2"},
 						},
-						Requires: []lifecycle.Require{{Name: "dep1"}, {Name: "dep1"}},
+						Requires: []buildpack.Require{{Name: "dep1"}, {Name: "dep1"}},
 					},
 					{
-						Providers: []lifecycle.GroupBuildpack{
+						Providers: []buildpack.GroupBuildpack{
 							{ID: "A", Version: "v1"},
 							{ID: "C", Version: "v2"},
 							{ID: "D", Version: "v2"},
 						},
-						Requires: []lifecycle.Require{{Name: "dep2"}, {Name: "dep2"}, {Name: "dep2"}},
+						Requires: []buildpack.Require{{Name: "dep2"}, {Name: "dep2"}, {Name: "dep2"}},
 					},
 				}) {
 					t.Fatalf("Unexpected entries:\n%+v\n", plan.Entries)
@@ -361,14 +367,14 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 				toappfile("\n[[requires]]\n name = \"dep1\"", "detect-plan-B-v1.toml", "detect-plan-C-v1.toml")
 				mkappfile("100", "detect-status-A-v1")
 
-				_, _, err := lifecycle.BuildpackOrder{
-					{Group: []lifecycle.GroupBuildpack{
+				_, _, err := buildpack.BuildpackOrder{
+					{Group: []buildpack.GroupBuildpack{
 						{ID: "A", Version: "v1", Optional: true},
 						{ID: "B", Version: "v1"},
 						{ID: "C", Version: "v1"},
 					}},
-				}.Detect(config)
-				if err, ok := err.(*lifecycle.Error); !ok || err.Type != lifecycle.ErrTypeFailedDetection {
+				}.Detect(detector)
+				if err, ok := err.(*errors.Error); !ok || err.Type != errors.ErrTypeFailedDetection {
 					t.Fatalf("Unexpected error:\n%s\n", err)
 				}
 
@@ -389,14 +395,14 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 				toappfile("\n[[requires]]\n name = \"dep1\"", "detect-plan-A-v1.toml", "detect-plan-C-v1.toml")
 				mkappfile("100", "detect-status-C-v1")
 
-				_, _, err := lifecycle.BuildpackOrder{
-					{Group: []lifecycle.GroupBuildpack{
+				_, _, err := buildpack.BuildpackOrder{
+					{Group: []buildpack.GroupBuildpack{
 						{ID: "A", Version: "v1"},
 						{ID: "B", Version: "v1"},
 						{ID: "C", Version: "v1", Optional: true},
 					}},
-				}.Detect(config)
-				if err, ok := err.(*lifecycle.Error); !ok || err.Type != lifecycle.ErrTypeFailedDetection {
+				}.Detect(detector)
+				if err, ok := err.(*errors.Error); !ok || err.Type != errors.ErrTypeFailedDetection {
 					t.Fatalf("Unexpected error:\n%s\n", err)
 				}
 
@@ -418,29 +424,29 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 				toappfile("\n[[requires]]\n name = \"dep-present\"", "detect-plan-B-v1.toml")
 				toappfile("\n[[provides]]\n name = \"dep-present\"", "detect-plan-B-v1.toml")
 
-				group, plan, err := lifecycle.BuildpackOrder{
-					{Group: []lifecycle.GroupBuildpack{
+				group, plan, err := buildpack.BuildpackOrder{
+					{Group: []buildpack.GroupBuildpack{
 						{ID: "A", Version: "v1", Optional: true},
 						{ID: "B", Version: "v1"},
 						{ID: "C", Version: "v1", Optional: true},
 					}},
-				}.Detect(config)
+				}.Detect(detector)
 				if err != nil {
 					t.Fatalf("Unexpected error:\n%s\n", err)
 				}
 
-				if s := cmp.Diff(group, lifecycle.BuildpackGroup{
-					Group: []lifecycle.GroupBuildpack{
+				if s := cmp.Diff(group, buildpack.BuildpackGroup{
+					Group: []buildpack.GroupBuildpack{
 						{ID: "B", Version: "v1", API: "0.2"},
 					},
 				}); s != "" {
 					t.Fatalf("Unexpected group:\n%s\n", s)
 				}
 
-				if !hasEntries(plan.Entries, []lifecycle.BuildPlanEntry{
+				if !hasEntries(plan.Entries, []buildpack.BuildPlanEntry{
 					{
-						Providers: []lifecycle.GroupBuildpack{{ID: "B", Version: "v1"}},
-						Requires:  []lifecycle.Require{{Name: "dep-present"}},
+						Providers: []buildpack.GroupBuildpack{{ID: "B", Version: "v1"}},
+						Requires:  []buildpack.Require{{Name: "dep-present"}},
 					},
 				}) {
 					t.Fatalf("Unexpected entries:\n%+v\n", plan.Entries)
@@ -484,20 +490,20 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 				toappfile("\n[[or.requires]]\n name = \"dep9-missing\"", "detect-plan-D-v1.toml")
 				toappfile("\n[[or.provides]]\n name = \"dep10-missing\"", "detect-plan-D-v1.toml")
 
-				group, plan, err := lifecycle.BuildpackOrder{
-					{Group: []lifecycle.GroupBuildpack{
+				group, plan, err := buildpack.BuildpackOrder{
+					{Group: []buildpack.GroupBuildpack{
 						{ID: "A", Version: "v1", Optional: true},
 						{ID: "B", Version: "v1", Optional: true},
 						{ID: "C", Version: "v1"},
 						{ID: "D", Version: "v1", Optional: true},
 					}},
-				}.Detect(config)
+				}.Detect(detector)
 				if err != nil {
 					t.Fatalf("Unexpected error:\n%s\n", err)
 				}
 
-				if s := cmp.Diff(group, lifecycle.BuildpackGroup{
-					Group: []lifecycle.GroupBuildpack{
+				if s := cmp.Diff(group, buildpack.BuildpackGroup{
+					Group: []buildpack.GroupBuildpack{
 						{ID: "A", Version: "v1", API: "0.3", Homepage: "Buildpack A Homepage"},
 						{ID: "B", Version: "v1", API: "0.2"},
 						{ID: "C", Version: "v1", API: "0.2"},
@@ -506,14 +512,14 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 					t.Fatalf("Unexpected group:\n%s\n", s)
 				}
 
-				if !hasEntries(plan.Entries, []lifecycle.BuildPlanEntry{
+				if !hasEntries(plan.Entries, []buildpack.BuildPlanEntry{
 					{
-						Providers: []lifecycle.GroupBuildpack{{ID: "A", Version: "v1"}},
-						Requires:  []lifecycle.Require{{Name: "dep1-present", Metadata: map[string]interface{}{"version": "some-version"}}},
+						Providers: []buildpack.GroupBuildpack{{ID: "A", Version: "v1"}},
+						Requires:  []buildpack.Require{{Name: "dep1-present", Metadata: map[string]interface{}{"version": "some-version"}}},
 					},
 					{
-						Providers: []lifecycle.GroupBuildpack{{ID: "C", Version: "v1"}},
-						Requires:  []lifecycle.Require{{Name: "dep6-present"}},
+						Providers: []buildpack.GroupBuildpack{{ID: "C", Version: "v1"}},
+						Requires:  []buildpack.Require{{Name: "dep6-present"}},
 					},
 				}) {
 					t.Fatalf("Unexpected entries:\n%+v\n", plan.Entries)
@@ -544,20 +550,20 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 				toappfile("\n[[requires]]\n name = \"dep2\"\n version = \"some-version\"", "detect-plan-D-v2.toml", "detect-plan-B-v1.toml")
 				toappfile("\n[[requires]]\n name = \"dep2\"\n version = \"some-version\"", "detect-plan-A-v1.toml")
 
-				group, plan, err := lifecycle.BuildpackOrder{
-					{Group: []lifecycle.GroupBuildpack{
+				group, plan, err := buildpack.BuildpackOrder{
+					{Group: []buildpack.GroupBuildpack{
 						{ID: "A", Version: "v1"},
 						{ID: "C", Version: "v2"},
 						{ID: "D", Version: "v2"},
 						{ID: "B", Version: "v1"},
 					}},
-				}.Detect(config)
+				}.Detect(detector)
 				if err != nil {
 					t.Fatalf("Unexpected error:\n%s\n", err)
 				}
 
-				if s := cmp.Diff(group, lifecycle.BuildpackGroup{
-					Group: []lifecycle.GroupBuildpack{
+				if s := cmp.Diff(group, buildpack.BuildpackGroup{
+					Group: []buildpack.GroupBuildpack{
 						{ID: "A", Version: "v1", API: "0.3", Homepage: "Buildpack A Homepage"},
 						{ID: "C", Version: "v2", API: "0.2"},
 						{ID: "D", Version: "v2", API: "0.2"},
@@ -567,24 +573,24 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 					t.Fatalf("Unexpected group:\n%s\n", s)
 				}
 
-				if !hasEntries(plan.Entries, []lifecycle.BuildPlanEntry{
+				if !hasEntries(plan.Entries, []buildpack.BuildPlanEntry{
 					{
-						Providers: []lifecycle.GroupBuildpack{
+						Providers: []buildpack.GroupBuildpack{
 							{ID: "A", Version: "v1"},
 							{ID: "C", Version: "v2"},
 						},
-						Requires: []lifecycle.Require{
+						Requires: []buildpack.Require{
 							{Name: "dep1", Metadata: map[string]interface{}{"version": "some-version"}},
 							{Name: "dep1", Metadata: map[string]interface{}{"version": "some-version"}},
 						},
 					},
 					{
-						Providers: []lifecycle.GroupBuildpack{
+						Providers: []buildpack.GroupBuildpack{
 							{ID: "A", Version: "v1"},
 							{ID: "C", Version: "v2"},
 							{ID: "D", Version: "v2"},
 						},
-						Requires: []lifecycle.Require{
+						Requires: []buildpack.Require{
 							{Name: "dep2", Metadata: map[string]interface{}{"version": "some-version"}},
 							{Name: "dep2", Metadata: map[string]interface{}{"version": "some-version"}},
 							{Name: "dep2", Metadata: map[string]interface{}{"version": "some-version"}},
@@ -599,9 +605,9 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 				it("should fail if buildpacks with buildpack api 0.2 have a top level version and a metadata version that are different", func() {
 					bpPath, err := filepath.Abs(filepath.Join("testdata", "by-id", "D", "v2"))
 					h.AssertNil(t, err)
-					bpTOML := lifecycle.BuildpackTOML{
+					bpTOML := buildpack.BuildpackTOML{
 						API: "0.2",
-						Buildpack: lifecycle.BuildpackInfo{
+						Buildpack: buildpack.BuildpackInfo{
 							ID:      "D",
 							Version: "v2",
 							Name:    "GroupBuildpack D",
@@ -612,7 +618,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 					toappfile("\n[[requires]]\n name = \"dep1\"\n version = \"some-version\"", "detect-plan-D-v2.toml")
 					toappfile("\n[requires.metadata]\n version = \"some-other-version\"", "detect-plan-D-v2.toml")
 
-					detectRun := bpTOML.Detect(config)
+					detectRun := bpTOML.Detect(detector)
 
 					h.AssertEq(t, detectRun.Code, -1)
 					err = detectRun.Err
@@ -625,9 +631,9 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 				it("should fail if buildpack with buildpack api 0.2 has alternate build plan with a top level version and a metadata version that are different", func() {
 					bpPath, err := filepath.Abs(filepath.Join("testdata", "by-id", "B", "v1"))
 					h.AssertNil(t, err)
-					bpTOML := lifecycle.BuildpackTOML{
+					bpTOML := buildpack.BuildpackTOML{
 						API: "0.2",
-						Buildpack: lifecycle.BuildpackInfo{
+						Buildpack: buildpack.BuildpackInfo{
 							ID:      "B",
 							Version: "v1",
 							Name:    "Buildpack B",
@@ -639,7 +645,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 					toappfile("\n[[or.requires]]\n name = \"dep1-present\"\n version = \"some-version\"", "detect-plan-B-v1.toml")
 					toappfile("\n[or.requires.metadata]\n version = \"some-other-version\"", "detect-plan-B-v1.toml")
 
-					detectRun := bpTOML.Detect(config)
+					detectRun := bpTOML.Detect(detector)
 
 					h.AssertEq(t, detectRun.Code, -1)
 					err = detectRun.Err
@@ -653,9 +659,9 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 				it("should fail if buildpacks with buildpack api 0.3+ have both a top level version and a metadata version", func() {
 					bpPath, err := filepath.Abs(filepath.Join("testdata", "by-id", "A", "v1"))
 					h.AssertNil(t, err)
-					bpTOML := lifecycle.BuildpackTOML{
+					bpTOML := buildpack.BuildpackTOML{
 						API: "0.3",
-						Buildpack: lifecycle.BuildpackInfo{
+						Buildpack: buildpack.BuildpackInfo{
 							ID:      "A",
 							Version: "v1",
 							Name:    "Buildpack A",
@@ -665,7 +671,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 					toappfile("\n[[requires]]\n name = \"dep2\"\n version = \"some-version\"", "detect-plan-A-v1.toml")
 					toappfile("\n[requires.metadata]\n version = \"some-version\"", "detect-plan-A-v1.toml")
 
-					detectRun := bpTOML.Detect(config)
+					detectRun := bpTOML.Detect(detector)
 
 					h.AssertEq(t, detectRun.Code, -1)
 					err = detectRun.Err
@@ -679,9 +685,9 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 				it("should fail if buildpack with buildpack api 0.3+ has alternate build plan with both a top level version and a metadata version", func() {
 					bpPath, err := filepath.Abs(filepath.Join("testdata", "by-id", "A", "v1"))
 					h.AssertNil(t, err)
-					bpTOML := lifecycle.BuildpackTOML{
+					bpTOML := buildpack.BuildpackTOML{
 						API: "0.3",
-						Buildpack: lifecycle.BuildpackInfo{
+						Buildpack: buildpack.BuildpackInfo{
 							ID:      "A",
 							Version: "v1",
 							Name:    "Buildpack A",
@@ -694,7 +700,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 					toappfile("\n[[or.requires]]\n name = \"dep1-present\"\n version = \"some-version\"", "detect-plan-A-v1.toml")
 					toappfile("\n[or.requires.metadata]\n version = \"some-version\"", "detect-plan-A-v1.toml")
 
-					detectRun := bpTOML.Detect(config)
+					detectRun := bpTOML.Detect(detector)
 
 					h.AssertEq(t, detectRun.Code, -1)
 					err = detectRun.Err
@@ -708,9 +714,9 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 				it("should warn if buildpacks with buildpack api 0.3+ have a top level version", func() {
 					bpPath, err := filepath.Abs(filepath.Join("testdata", "by-id", "A", "v1"))
 					h.AssertNil(t, err)
-					bpTOML := lifecycle.BuildpackTOML{
+					bpTOML := buildpack.BuildpackTOML{
 						API: "0.3",
-						Buildpack: lifecycle.BuildpackInfo{
+						Buildpack: buildpack.BuildpackInfo{
 							ID:      "A",
 							Version: "v1",
 							Name:    "Buildpack A",
@@ -719,7 +725,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 					}
 					toappfile("\n[[requires]]\n name = \"dep2\"\n version = \"some-version\"", "detect-plan-A-v1.toml")
 
-					detectRun := bpTOML.Detect(config)
+					detectRun := bpTOML.Detect(detector)
 
 					h.AssertEq(t, detectRun.Code, 0)
 					err = detectRun.Err
@@ -736,9 +742,9 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 				it("should warn if buildpack with buildpack api 0.3+ has alternate build plan with a top level version", func() {
 					bpPath, err := filepath.Abs(filepath.Join("testdata", "by-id", "A", "v1"))
 					h.AssertNil(t, err)
-					bpTOML := lifecycle.BuildpackTOML{
+					bpTOML := buildpack.BuildpackTOML{
 						API: "0.3",
-						Buildpack: lifecycle.BuildpackInfo{
+						Buildpack: buildpack.BuildpackInfo{
 							ID:      "A",
 							Version: "v1",
 							Name:    "Buildpack A",
@@ -750,7 +756,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 					toappfile("\n[[or.provides]]\n name = \"dep1-present\"", "detect-plan-A-v1.toml")
 					toappfile("\n[[or.requires]]\n name = \"dep1-present\"\n version = \"some-version\"", "detect-plan-A-v1.toml")
 
-					detectRun := bpTOML.Detect(config)
+					detectRun := bpTOML.Detect(detector)
 
 					h.AssertEq(t, detectRun.Code, 0)
 					err = detectRun.Err
@@ -768,7 +774,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 	})
 }
 
-func hasEntry(l []lifecycle.BuildPlanEntry, entry lifecycle.BuildPlanEntry) bool {
+func hasEntry(l []buildpack.BuildPlanEntry, entry buildpack.BuildPlanEntry) bool {
 	for _, e := range l {
 		if reflect.DeepEqual(e, entry) {
 			return true
@@ -777,7 +783,7 @@ func hasEntry(l []lifecycle.BuildPlanEntry, entry lifecycle.BuildPlanEntry) bool
 	return false
 }
 
-func hasEntries(a, b []lifecycle.BuildPlanEntry) bool {
+func hasEntries(a, b []buildpack.BuildPlanEntry) bool {
 	if len(a) != len(b) {
 		return false
 	}

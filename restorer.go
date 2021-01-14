@@ -4,12 +4,14 @@ import (
 	"github.com/pkg/errors"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/buildpacks/lifecycle/buildpack"
+
 	"github.com/buildpacks/lifecycle/layers"
 )
 
 type Restorer struct {
 	LayersDir  string
-	Buildpacks []GroupBuildpack
+	Buildpacks []buildpack.GroupBuildpack
 	Logger     Logger
 }
 

@@ -1,8 +1,9 @@
-package lifecycle
+package buildpack
 
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 	"os/exec"
@@ -12,23 +13,60 @@ import (
 
 	"github.com/buildpacks/lifecycle/api"
 	"github.com/buildpacks/lifecycle/env"
+	lerrors "github.com/buildpacks/lifecycle/errors"
 	"github.com/buildpacks/lifecycle/launch"
 	"github.com/buildpacks/lifecycle/layers"
 )
 
-type DirBuildpackStore struct {
-	Dir string
+type BuildEnv interface {
+	AddRootDir(baseDir string) error
+	AddEnvDir(envDir string, defaultAction env.ActionType) error
+	WithPlatform(platformDir string) ([]string, error)
+	List() []string
 }
 
-func (f *DirBuildpackStore) Lookup(bpID, bpVersion string) (Buildpack, error) {
-	bpTOML := BuildpackTOML{}
-	bpPath := filepath.Join(f.Dir, launch.EscapeID(bpID), bpVersion)
-	tomlPath := filepath.Join(bpPath, "buildpack.toml")
-	if _, err := toml.DecodeFile(tomlPath, &bpTOML); err != nil {
-		return nil, err
+type BuildConfig struct {
+	Env         BuildEnv
+	AppDir      string
+	PlatformDir string
+	LayersDir   string
+	Out         io.Writer
+	Err         io.Writer
+}
+
+type BuildResult struct {
+	BOM         []BOMEntry
+	Labels      []Label
+	MetRequires []string
+	Processes   []launch.Process
+	Slices      []layers.Slice
+}
+
+type BOMEntry struct {
+	Require
+	Buildpack GroupBuildpack `toml:"buildpack" json:"buildpack"`
+}
+
+func (bom *BOMEntry) ConvertMetadataToVersion() {
+	if version, ok := bom.Metadata["version"]; ok {
+		metadataVersion := fmt.Sprintf("%v", version)
+		bom.Version = metadataVersion
 	}
-	bpTOML.Dir = bpPath
-	return &bpTOML, nil
+}
+
+func (bom *BOMEntry) convertVersionToMetadata() {
+	if bom.Version != "" {
+		if bom.Metadata == nil {
+			bom.Metadata = make(map[string]interface{})
+		}
+		bom.Metadata["version"] = bom.Version
+		bom.Version = ""
+	}
+}
+
+type Label struct {
+	Key   string `toml:"key"`
+	Value string `toml:"value"`
 }
 
 type BuildTOML struct {
@@ -45,17 +83,6 @@ type LaunchTOML struct {
 	Labels    []Label
 	Processes []launch.Process `toml:"processes"`
 	Slices    []layers.Slice   `toml:"slices"`
-}
-
-type BuildpackTOML struct {
-	API       string         `toml:"api"`
-	Buildpack BuildpackInfo  `toml:"buildpack"`
-	Order     BuildpackOrder `toml:"order"`
-	Dir       string         `toml:"-"`
-}
-
-func (b *BuildpackTOML) String() string {
-	return b.Buildpack.Name + " " + b.Buildpack.Version
 }
 
 func (b *BuildpackTOML) Build(bpPlan BuildpackPlan, config BuildConfig) (BuildResult, error) {
@@ -105,6 +132,19 @@ func preparePaths(bpID string, bpPlan BuildpackPlan, layersDir, planDir string) 
 	return bpLayersDir, bpPlanPath, nil
 }
 
+// TODO: copied from lifecycle
+func WriteTOML(path string, data interface{}) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0777); err != nil {
+		return err
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return toml.NewEncoder(f).Encode(data)
+}
+
 func (b *BuildpackTOML) runBuildCmd(bpLayersDir, bpPlanPath string, config BuildConfig) error {
 	cmd := exec.Command(
 		filepath.Join(b.Dir, "bin", "build"),
@@ -128,7 +168,7 @@ func (b *BuildpackTOML) runBuildCmd(bpLayersDir, bpPlanPath string, config Build
 	cmd.Env = append(cmd.Env, EnvBuildpackDir+"="+b.Dir)
 
 	if err := cmd.Run(); err != nil {
-		return NewLifecycleError(err, ErrTypeBuildpack)
+		return lerrors.NewLifecycleError(err, lerrors.ErrTypeBuildpack)
 	}
 	return nil
 }
@@ -200,7 +240,7 @@ func (b *BuildpackTOML) readOutputFiles(bpLayersDir, bpPlanPath string, bpPlanIn
 		if err := validateBOM(bpPlanOut.toBOM(), b.API); err != nil {
 			return BuildResult{}, err
 		}
-		br.BOM = withBuildpack(bpFromBpInfo, bpPlanOut.toBOM())
+		br.BOM = WithBuildpack(bpFromBpInfo, bpPlanOut.toBOM())
 		for i := range br.BOM {
 			br.BOM[i].convertVersionToMetadata()
 		}
@@ -240,7 +280,7 @@ func (b *BuildpackTOML) readOutputFiles(bpLayersDir, bpPlanPath string, bpPlanIn
 		if err := validateBOM(launchTOML.BOM, b.API); err != nil {
 			return BuildResult{}, err
 		}
-		br.BOM = withBuildpack(bpFromBpInfo, launchTOML.BOM)
+		br.BOM = WithBuildpack(bpFromBpInfo, launchTOML.BOM)
 	}
 
 	// set data from launch.toml
@@ -301,37 +341,10 @@ func names(requires []Require) []string {
 	return out
 }
 
-func (p BuildpackPlan) filter(unmet []Unmet) BuildpackPlan {
-	var out []Require
-	for _, entry := range p.Entries {
-		if !containsName(unmet, entry.Name) {
-			out = append(out, entry)
-		}
-	}
-	return BuildpackPlan{Entries: out}
-}
-
-func containsName(unmet []Unmet, name string) bool {
-	for _, u := range unmet {
-		if u.Name == name {
-			return true
-		}
-	}
-	return false
-}
-
-func (p BuildpackPlan) toBOM() []BOMEntry {
-	var bom []BOMEntry
-	for _, entry := range p.Entries {
-		bom = append(bom, BOMEntry{Require: entry})
-	}
-	return bom
-}
-
-func withBuildpack(bp GroupBuildpack, bom []BOMEntry) []BOMEntry {
+func WithBuildpack(bp GroupBuildpack, bom []BOMEntry) []BOMEntry { // TODO: maybe this should be a method on BOMEntry
 	var out []BOMEntry
 	for _, entry := range bom {
-		entry.Buildpack = bp.noAPI().noHomepage()
+		entry.Buildpack = bp.NoAPI().NoHomepage()
 		out = append(out, entry)
 	}
 	return out

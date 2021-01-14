@@ -4,6 +4,8 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/pkg/errors"
 
+	"github.com/buildpacks/lifecycle/buildpack"
+
 	"github.com/buildpacks/lifecycle/launch"
 	"github.com/buildpacks/lifecycle/layers"
 )
@@ -16,12 +18,12 @@ const (
 )
 
 type BuildMetadata struct {
-	BOM        []BOMEntry       `toml:"bom" json:"bom"`
-	Buildpacks []GroupBuildpack `toml:"buildpacks" json:"buildpacks"`
-	Labels     []Label          `toml:"labels" json:"-"`
-	Launcher   LauncherMetadata `toml:"-" json:"launcher"`
-	Processes  []launch.Process `toml:"processes" json:"processes"`
-	Slices     []layers.Slice   `toml:"slices" json:"-"`
+	BOM        []buildpack.BOMEntry       `toml:"bom" json:"bom"`
+	Buildpacks []buildpack.GroupBuildpack `toml:"buildpacks" json:"buildpacks"`
+	Labels     []buildpack.Label          `toml:"labels" json:"-"`
+	Launcher   LauncherMetadata           `toml:"-" json:"launcher"`
+	Processes  []launch.Process           `toml:"processes" json:"processes"`
+	Slices     []layers.Slice             `toml:"slices" json:"-"`
 }
 
 type LauncherMetadata struct {

@@ -3,11 +3,11 @@ package lifecycle_test
 import (
 	"testing"
 
+	errors2 "github.com/buildpacks/lifecycle/errors"
+
 	"errors"
 
 	"github.com/sclevine/spec"
-
-	"github.com/buildpacks/lifecycle"
 )
 
 func TestError(t *testing.T) {
@@ -18,7 +18,7 @@ func testError(t *testing.T, when spec.G, it spec.S) {
 	when("#Cause", func() {
 		it("returns the error", func() {
 			expectedErr := errors.New("root cause")
-			testErr := &lifecycle.Error{
+			testErr := &errors2.Error{
 				RootError: expectedErr,
 			}
 
@@ -30,7 +30,7 @@ func testError(t *testing.T, when spec.G, it spec.S) {
 		})
 
 		it("returns handles nil state", func() {
-			testErr := &lifecycle.Error{}
+			testErr := &errors2.Error{}
 
 			if testErr.Cause() != nil {
 				t.Fatalf("Unexpected cause:\n%s\n", testErr.Cause())
@@ -41,7 +41,7 @@ func testError(t *testing.T, when spec.G, it spec.S) {
 	when("#Error", func() {
 		it("returns the underlying error", func() {
 			expectedErr := errors.New("root cause")
-			testErr := &lifecycle.Error{
+			testErr := &errors2.Error{
 				RootError: expectedErr,
 			}
 
@@ -51,8 +51,8 @@ func testError(t *testing.T, when spec.G, it spec.S) {
 		})
 
 		it("returns the type when there is no error", func() {
-			testErr := &lifecycle.Error{
-				Type: lifecycle.ErrTypeBuildpack,
+			testErr := &errors2.Error{
+				Type: errors2.ErrTypeBuildpack,
 			}
 
 			if testErr.Error() != "ERR_BUILDPACK" {

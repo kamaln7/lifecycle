@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/buildpacks/lifecycle/buildpack"
+
 	"github.com/google/go-containerregistry/pkg/authn"
 
 	"github.com/buildpacks/lifecycle"
@@ -87,7 +89,7 @@ func (r *restoreCmd) registryImages() []string {
 	return []string{}
 }
 
-func restore(layersDir string, group lifecycle.BuildpackGroup, cacheStore lifecycle.Cache) error {
+func restore(layersDir string, group buildpack.BuildpackGroup, cacheStore lifecycle.Cache) error {
 	restorer := &lifecycle.Restorer{
 		LayersDir:  layersDir,
 		Buildpacks: group.Group,

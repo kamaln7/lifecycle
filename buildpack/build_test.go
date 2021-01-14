@@ -1,4 +1,4 @@
-package lifecycle_test
+package buildpack_test
 
 import (
 	"bytes"
@@ -10,21 +10,24 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/BurntSushi/toml"
+	lerrors "github.com/buildpacks/lifecycle/errors"
 
+	"github.com/BurntSushi/toml"
 	"github.com/golang/mock/gomock"
 	"github.com/google/go-cmp/cmp"
 	"github.com/sclevine/spec"
 	"github.com/sclevine/spec/report"
 
-	"github.com/buildpacks/lifecycle"
 	"github.com/buildpacks/lifecycle/api"
+	"github.com/buildpacks/lifecycle/buildpack"
 	"github.com/buildpacks/lifecycle/env"
 	"github.com/buildpacks/lifecycle/launch"
 	"github.com/buildpacks/lifecycle/layers"
 	h "github.com/buildpacks/lifecycle/testhelpers"
 	"github.com/buildpacks/lifecycle/testmock"
 )
+
+// TODO: fix duplicated test fixtures
 
 var latestBuildpackAPI = api.Buildpack.Latest()
 
@@ -36,7 +39,7 @@ func TestBuildpackTOML(t *testing.T) {
 
 func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 	var (
-		bpTOML         lifecycle.BuildpackTOML
+		bpTOML         buildpack.BuildpackTOML
 		mockCtrl       *gomock.Controller
 		mockEnv        *testmock.MockBuildEnv
 		stdout, stderr *bytes.Buffer
@@ -45,7 +48,7 @@ func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 		appDir         string
 		layersDir      string
 		buildpacksDir  string
-		config         lifecycle.BuildConfig
+		config         buildpack.BuildConfig
 	)
 
 	it.Before(func() {
@@ -68,7 +71,7 @@ func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 			t.Fatalf("Error: %s\n", err)
 		}
 
-		config = lifecycle.BuildConfig{
+		config = buildpack.BuildConfig{
 			Env:         mockEnv,
 			AppDir:      appDir,
 			PlatformDir: platformDir,
@@ -77,9 +80,9 @@ func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 			Err:         stderr,
 		}
 
-		bpTOML = lifecycle.BuildpackTOML{
+		bpTOML = buildpack.BuildpackTOML{
 			API: latestBuildpackAPI.String(),
-			Buildpack: lifecycle.BuildpackInfo{
+			Buildpack: buildpack.BuildpackInfo{
 				ID:       "A",
 				Version:  "v1",
 				Name:     "Buildpack A",
@@ -120,7 +123,7 @@ func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 					mockEnv.EXPECT().AddEnvDir(filepath.Join(layersDir, "A", "layer3", "env"), env.ActionTypeOverride),
 					mockEnv.EXPECT().AddEnvDir(filepath.Join(layersDir, "A", "layer3", "env.build"), env.ActionTypeOverride),
 				)
-				if _, err := bpTOML.Build(lifecycle.BuildpackPlan{}, config); err != nil {
+				if _, err := bpTOML.Build(buildpack.BuildpackPlan{}, config); err != nil {
 					t.Fatalf("Unexpected error:\n%s\n", err)
 				}
 				testExists(t,
@@ -132,7 +135,7 @@ func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 				h.Mkfile(t, "some-data",
 					filepath.Join(platformDir, "env", "SOME_VAR"),
 				)
-				if _, err := bpTOML.Build(lifecycle.BuildpackPlan{}, config); err != nil {
+				if _, err := bpTOML.Build(buildpack.BuildpackPlan{}, config); err != nil {
 					t.Fatalf("Unexpected error:\n%s\n", err)
 				}
 				testExists(t,
@@ -141,7 +144,7 @@ func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 			})
 
 			it("should provide environment variables", func() {
-				if _, err := bpTOML.Build(lifecycle.BuildpackPlan{}, config); err != nil {
+				if _, err := bpTOML.Build(buildpack.BuildpackPlan{}, config); err != nil {
 					t.Fatalf("Unexpected error:\n%s\n", err)
 				}
 				if s := cmp.Diff(h.Rdfile(t, filepath.Join(appDir, "build-info-A-v1")),
@@ -152,7 +155,7 @@ func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 			})
 
 			it("should set CNB_BUILDPACK_DIR", func() {
-				if _, err := bpTOML.Build(lifecycle.BuildpackPlan{}, config); err != nil {
+				if _, err := bpTOML.Build(buildpack.BuildpackPlan{}, config); err != nil {
 					t.Fatalf("Unexpected error:\n%s\n", err)
 				}
 				if s := cmp.Diff(h.Rdfile(t, filepath.Join(appDir, "build-env-cnb-buildpack-dir-A-v1")),
@@ -163,7 +166,7 @@ func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 			})
 
 			it("should connect stdout and stdin to the terminal", func() {
-				if _, err := bpTOML.Build(lifecycle.BuildpackPlan{}, config); err != nil {
+				if _, err := bpTOML.Build(buildpack.BuildpackPlan{}, config); err != nil {
 					t.Fatalf("Unexpected error:\n%s\n", err)
 				}
 				if s := cmp.Diff(h.CleanEndings(stdout.String()), "build out: A@v1\n"); s != "" {
@@ -176,8 +179,8 @@ func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 
 			when("build result", func() {
 				it("should get bom entries from launch.toml and unmet requires from build.toml", func() {
-					bpPlan := lifecycle.BuildpackPlan{
-						Entries: []lifecycle.Require{
+					bpPlan := buildpack.BuildpackPlan{
+						Entries: []buildpack.Require{
 							{
 								Name:    "some-deprecated-bp-replace-version-dep",
 								Version: "some-version-orig", // top-level version is deprecated in buildpack API 0.3
@@ -223,31 +226,31 @@ func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 						t.Fatalf("Unexpected error:\n%s\n", err)
 					}
 
-					if s := cmp.Diff(br, lifecycle.BuildResult{
-						BOM: []lifecycle.BOMEntry{
+					if s := cmp.Diff(br, buildpack.BuildResult{
+						BOM: []buildpack.BOMEntry{
 							{
-								Require: lifecycle.Require{
+								Require: buildpack.Require{
 									Name:     "some-deprecated-bp-replace-version-dep",
 									Metadata: map[string]interface{}{"version": "some-version-new"},
 								},
-								Buildpack: lifecycle.GroupBuildpack{ID: "A", Version: "v1"}, // no api, no homepage
+								Buildpack: buildpack.GroupBuildpack{ID: "A", Version: "v1"}, // no api, no homepage
 							},
 							{
-								Require: lifecycle.Require{
+								Require: buildpack.Require{
 									Name:     "some-dep",
 									Metadata: map[string]interface{}{"version": "v1"},
 								},
-								Buildpack: lifecycle.GroupBuildpack{ID: "A", Version: "v1"}, // no api, no homepage
+								Buildpack: buildpack.GroupBuildpack{ID: "A", Version: "v1"}, // no api, no homepage
 							},
 							{
-								Require: lifecycle.Require{
+								Require: buildpack.Require{
 									Name:     "some-replace-version-dep",
 									Metadata: map[string]interface{}{"version": "some-version-new"},
 								},
-								Buildpack: lifecycle.GroupBuildpack{ID: "A", Version: "v1"}, // no api, no homepage
+								Buildpack: buildpack.GroupBuildpack{ID: "A", Version: "v1"}, // no api, no homepage
 							},
 						},
-						Labels:      []lifecycle.Label{},
+						Labels:      []buildpack.Label{},
 						MetRequires: []string{"some-deprecated-bp-replace-version-dep", "some-dep", "some-replace-version-dep"},
 						Processes:   []launch.Process{},
 						Slices:      []layers.Slice{},
@@ -267,14 +270,14 @@ func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 						filepath.Join(appDir, "launch-A-v1.toml"),
 					)
 
-					br, err := bpTOML.Build(lifecycle.BuildpackPlan{}, config)
+					br, err := bpTOML.Build(buildpack.BuildpackPlan{}, config)
 					if err != nil {
 						t.Fatalf("Unexpected error:\n%s\n", err)
 					}
 
-					if s := cmp.Diff(br, lifecycle.BuildResult{
+					if s := cmp.Diff(br, buildpack.BuildResult{
 						BOM: nil,
-						Labels: []lifecycle.Label{
+						Labels: []buildpack.Label{
 							{Key: "some-key", Value: "some-value"},
 							{Key: "some-other-key", Value: "some-other-value"},
 						},
@@ -296,13 +299,13 @@ func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 							`command = "other-cmd"`+"\n",
 						filepath.Join(appDir, "launch-A-v1.toml"),
 					)
-					br, err := bpTOML.Build(lifecycle.BuildpackPlan{}, config)
+					br, err := bpTOML.Build(buildpack.BuildpackPlan{}, config)
 					if err != nil {
 						t.Fatalf("Unexpected error:\n%s\n", err)
 					}
-					if s := cmp.Diff(br, lifecycle.BuildResult{
+					if s := cmp.Diff(br, buildpack.BuildResult{
 						BOM:         nil,
-						Labels:      []lifecycle.Label{},
+						Labels:      []buildpack.Label{},
 						MetRequires: nil,
 						Processes: []launch.Process{
 							{Type: "some-type", Command: "some-cmd", BuildpackID: "A"},
@@ -321,14 +324,14 @@ func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 						filepath.Join(appDir, "launch-A-v1.toml"),
 					)
 
-					br, err := bpTOML.Build(lifecycle.BuildpackPlan{}, config)
+					br, err := bpTOML.Build(buildpack.BuildpackPlan{}, config)
 					if err != nil {
 						t.Fatalf("Unexpected error:\n%s\n", err)
 					}
 
-					if s := cmp.Diff(br, lifecycle.BuildResult{
+					if s := cmp.Diff(br, buildpack.BuildResult{
 						BOM:         nil,
-						Labels:      []lifecycle.Label{},
+						Labels:      []buildpack.Label{},
 						MetRequires: nil,
 						Processes:   []launch.Process{},
 						Slices:      []layers.Slice{{Paths: []string{"some-path", "some-other-path"}}},
@@ -349,7 +352,7 @@ func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 			})
 
 			it("should not apply user-provided env vars", func() {
-				if _, err := bpTOML.Build(lifecycle.BuildpackPlan{}, config); err != nil {
+				if _, err := bpTOML.Build(buildpack.BuildpackPlan{}, config); err != nil {
 					t.Fatalf("Error: %s\n", err)
 				}
 				if s := cmp.Diff(h.Rdfile(t, filepath.Join(appDir, "build-info-A-v1.clear")),
@@ -360,7 +363,7 @@ func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 			})
 
 			it("should set CNB_BUILDPACK_DIR", func() {
-				if _, err := bpTOML.Build(lifecycle.BuildpackPlan{}, config); err != nil {
+				if _, err := bpTOML.Build(buildpack.BuildpackPlan{}, config); err != nil {
 					t.Fatalf("Error: %s\n", err)
 				}
 				if s := cmp.Diff(h.Rdfile(t, filepath.Join(appDir, "build-env-cnb-buildpack-dir-A-v1.clear")),
@@ -374,15 +377,15 @@ func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 		when("building fails", func() {
 			it("should error when layer directories cannot be created", func() {
 				h.Mkfile(t, "some-data", filepath.Join(layersDir, "A"))
-				_, err := bpTOML.Build(lifecycle.BuildpackPlan{}, config)
+				_, err := bpTOML.Build(buildpack.BuildpackPlan{}, config)
 				if _, ok := err.(*os.PathError); !ok {
 					t.Fatalf("Incorrect error: %s\n", err)
 				}
 			})
 
 			it("should error when the provided buildpack plan is invalid", func() {
-				bpPlan := lifecycle.BuildpackPlan{
-					Entries: []lifecycle.Require{
+				bpPlan := buildpack.BuildpackPlan{
+					Entries: []buildpack.Require{
 						{
 							Metadata: map[string]interface{}{"a": map[int64]int64{1: 2}}, // map with non-string key type
 						},
@@ -397,7 +400,7 @@ func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 
 			it("should error when the env cannot be found", func() {
 				mockEnv.EXPECT().WithPlatform(platformDir).Return(nil, errors.New("some error"))
-				if _, err := bpTOML.Build(lifecycle.BuildpackPlan{}, config); err == nil {
+				if _, err := bpTOML.Build(buildpack.BuildpackPlan{}, config); err == nil {
 					t.Fatal("Expected error.\n")
 				} else if !strings.Contains(err.Error(), "some error") {
 					t.Fatalf("Incorrect error: %s\n", err)
@@ -409,8 +412,8 @@ func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 				if err := os.RemoveAll(platformDir); err != nil {
 					t.Fatalf("Error: %s\n", err)
 				}
-				_, err := bpTOML.Build(lifecycle.BuildpackPlan{}, config)
-				if err, ok := err.(*lifecycle.Error); !ok || err.Type != lifecycle.ErrTypeBuildpack {
+				_, err := bpTOML.Build(buildpack.BuildpackPlan{}, config)
+				if err, ok := err.(*lerrors.Error); !ok || err.Type != lerrors.ErrTypeBuildpack {
 					t.Fatalf("Incorrect error: %s\n", err)
 				}
 			})
@@ -451,7 +454,7 @@ func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 						filepath.Join(appDir, "layers-A-v1", "layer1.toml"),
 						filepath.Join(appDir, "layers-A-v1", "layer2.toml"),
 					)
-					if _, err := bpTOML.Build(lifecycle.BuildpackPlan{}, config); err != appendErr {
+					if _, err := bpTOML.Build(buildpack.BuildpackPlan{}, config); err != appendErr {
 						t.Fatalf("Incorrect error: %s\n", err)
 					}
 				})
@@ -460,7 +463,7 @@ func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 			it("should error when launch.toml is not writable", func() {
 				mockEnv.EXPECT().WithPlatform(platformDir).Return(append(os.Environ(), "TEST_ENV=Av1"), nil)
 				h.Mkdir(t, filepath.Join(layersDir, "A", "launch.toml"))
-				if _, err := bpTOML.Build(lifecycle.BuildpackPlan{}, config); err == nil {
+				if _, err := bpTOML.Build(buildpack.BuildpackPlan{}, config); err == nil {
 					t.Fatal("Expected error")
 				}
 			})
@@ -473,7 +476,7 @@ func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 						`version = "some-version"`+"\n",
 					filepath.Join(appDir, "launch-A-v1.toml"),
 				)
-				_, err := bpTOML.Build(lifecycle.BuildpackPlan{}, config)
+				_, err := bpTOML.Build(buildpack.BuildpackPlan{}, config)
 				h.AssertNotNil(t, err)
 				expected := "top level version which is not allowed"
 				h.AssertStringContains(t, err.Error(), expected)
@@ -487,7 +490,7 @@ func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 						`version = "some-version"`+"\n",
 					filepath.Join(appDir, "build-A-v1.toml"),
 				)
-				_, err := bpTOML.Build(lifecycle.BuildpackPlan{}, config)
+				_, err := bpTOML.Build(buildpack.BuildpackPlan{}, config)
 				h.AssertNotNil(t, err)
 				expected := "top level version which is not allowed"
 				h.AssertStringContains(t, err.Error(), expected)
@@ -501,7 +504,7 @@ func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 							"[[unmet]]\n",
 							filepath.Join(appDir, "build-A-v1.toml"),
 						)
-						_, err := bpTOML.Build(lifecycle.BuildpackPlan{}, config)
+						_, err := bpTOML.Build(buildpack.BuildpackPlan{}, config)
 						h.AssertNotNil(t, err)
 						expected := "name is required"
 						h.AssertStringContains(t, err.Error(), expected)
@@ -516,7 +519,7 @@ func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 								`name = "unknown-dep"`+"\n",
 							filepath.Join(appDir, "build-A-v1.toml"),
 						)
-						_, err := bpTOML.Build(lifecycle.BuildpackPlan{}, config)
+						_, err := bpTOML.Build(buildpack.BuildpackPlan{}, config)
 						h.AssertNotNil(t, err)
 						expected := "must match a requested dependency"
 						h.AssertStringContains(t, err.Error(), expected)
@@ -532,8 +535,8 @@ func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 			})
 
 			it("should convert metadata version to top level version in the buildpack plan", func() {
-				bpPlan := lifecycle.BuildpackPlan{
-					Entries: []lifecycle.Require{
+				bpPlan := buildpack.BuildpackPlan{
+					Entries: []buildpack.Require{
 						{
 							Name:     "some-dep",
 							Metadata: map[string]interface{}{"version": "v1"},
@@ -547,7 +550,7 @@ func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 				}
 
 				testPlan(t,
-					[]lifecycle.Require{
+					[]buildpack.Require{
 						{
 							Name:     "some-dep",
 							Version:  "v1",
@@ -588,7 +591,7 @@ func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 						mockEnv.EXPECT().AddEnvDir(filepath.Join(layersDir, "A", "layer3", "env"), env.ActionTypePrependPath),
 						mockEnv.EXPECT().AddEnvDir(filepath.Join(layersDir, "A", "layer3", "env.build"), env.ActionTypePrependPath),
 					)
-					if _, err := bpTOML.Build(lifecycle.BuildpackPlan{}, config); err != nil {
+					if _, err := bpTOML.Build(buildpack.BuildpackPlan{}, config); err != nil {
 						t.Fatalf("Unexpected error:\n%s\n", err)
 					}
 					testExists(t,
@@ -597,8 +600,8 @@ func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 				})
 
 				it("should get bom entries and unmet requires from the output buildpack plan", func() {
-					bpPlan := lifecycle.BuildpackPlan{
-						Entries: []lifecycle.Require{
+					bpPlan := buildpack.BuildpackPlan{
+						Entries: []buildpack.Require{
 							{
 								Name:    "some-deprecated-bp-dep",
 								Version: "v1", // top-level version is deprecated in buildpack API 0.3
@@ -644,35 +647,35 @@ func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 						t.Fatalf("Unexpected error:\n%s\n", err)
 					}
 
-					if s := cmp.Diff(br, lifecycle.BuildResult{
-						BOM: []lifecycle.BOMEntry{
+					if s := cmp.Diff(br, buildpack.BuildResult{
+						BOM: []buildpack.BOMEntry{
 							{
-								Require: lifecycle.Require{
+								Require: buildpack.Require{
 									Name:     "some-deprecated-bp-dep",
 									Metadata: map[string]interface{}{"version": "v1"},
 								},
-								Buildpack: lifecycle.GroupBuildpack{ID: "A", Version: "v1"},
+								Buildpack: buildpack.GroupBuildpack{ID: "A", Version: "v1"},
 							},
 							{
-								Require: lifecycle.Require{
+								Require: buildpack.Require{
 									Name:     "some-deprecated-bp-replace-version-dep",
 									Metadata: map[string]interface{}{"version": "some-version-new"},
 								},
-								Buildpack: lifecycle.GroupBuildpack{ID: "A", Version: "v1"},
+								Buildpack: buildpack.GroupBuildpack{ID: "A", Version: "v1"},
 							},
 							{
-								Require: lifecycle.Require{
+								Require: buildpack.Require{
 									Name:     "some-dep",
 									Metadata: map[string]interface{}{"version": "v1"},
 								},
-								Buildpack: lifecycle.GroupBuildpack{ID: "A", Version: "v1"},
+								Buildpack: buildpack.GroupBuildpack{ID: "A", Version: "v1"},
 							},
 							{
-								Require: lifecycle.Require{
+								Require: buildpack.Require{
 									Name:     "some-replace-version-dep",
 									Metadata: map[string]interface{}{"version": "some-version-new"},
 								},
-								Buildpack: lifecycle.GroupBuildpack{ID: "A", Version: "v1"},
+								Buildpack: buildpack.GroupBuildpack{ID: "A", Version: "v1"},
 							},
 						},
 						Labels: nil,
@@ -706,32 +709,32 @@ func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 						filepath.Join(appDir, "build-plan-out-A-v1.toml"),
 					)
 
-					br, err := bpTOML.Build(lifecycle.BuildpackPlan{}, config)
+					br, err := bpTOML.Build(buildpack.BuildpackPlan{}, config)
 					if err != nil {
 						t.Fatalf("Unexpected error:\n%s\n", err)
 					}
 
-					if s := cmp.Diff(br.BOM, []lifecycle.BOMEntry{
+					if s := cmp.Diff(br.BOM, []buildpack.BOMEntry{
 						{
-							Require: lifecycle.Require{
+							Require: buildpack.Require{
 								Name:     "dep-1",
 								Metadata: map[string]interface{}{"version": "v1"},
 							},
-							Buildpack: lifecycle.GroupBuildpack{ID: "A", Version: "v1"},
+							Buildpack: buildpack.GroupBuildpack{ID: "A", Version: "v1"},
 						},
 						{
-							Require: lifecycle.Require{
+							Require: buildpack.Require{
 								Name:     "dep-2",
 								Metadata: map[string]interface{}{"version": "v2"},
 							},
-							Buildpack: lifecycle.GroupBuildpack{ID: "A", Version: "v1"},
+							Buildpack: buildpack.GroupBuildpack{ID: "A", Version: "v1"},
 						},
 						{
-							Require: lifecycle.Require{
+							Require: buildpack.Require{
 								Name:     "dep-3",
 								Metadata: map[string]interface{}{"version": "v3"},
 							},
-							Buildpack: lifecycle.GroupBuildpack{ID: "A", Version: "v1"},
+							Buildpack: buildpack.GroupBuildpack{ID: "A", Version: "v1"},
 						},
 					}); s != "" {
 						t.Fatalf("Unexpected:\n%s\n", s)
@@ -743,7 +746,7 @@ func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 				it("should error when the output buildpack plan is invalid", func() {
 					mockEnv.EXPECT().WithPlatform(platformDir).Return(append(os.Environ(), "TEST_ENV=Av1"), nil)
 					h.Mkfile(t, "bad-key", filepath.Join(appDir, "build-plan-out-A-v1.toml"))
-					if _, err := bpTOML.Build(lifecycle.BuildpackPlan{}, config); err == nil {
+					if _, err := bpTOML.Build(buildpack.BuildpackPlan{}, config); err == nil {
 						t.Fatal("Expected error.\n")
 					} else if !strings.Contains(err.Error(), "key") {
 						t.Fatalf("Incorrect error: %s\n", err)
@@ -760,7 +763,7 @@ func testBuildpackTOML(t *testing.T, when spec.G, it spec.S) {
 							`version = "v1"`+"\n",
 						filepath.Join(appDir, "build-plan-out-A-v1.toml"),
 					)
-					_, err := bpTOML.Build(lifecycle.BuildpackPlan{}, config)
+					_, err := bpTOML.Build(buildpack.BuildpackPlan{}, config)
 					h.AssertNotNil(t, err)
 					expected := "top level version does not match metadata version"
 					h.AssertStringContains(t, err.Error(), expected)
@@ -779,11 +782,11 @@ func testExists(t *testing.T, paths ...string) {
 	}
 }
 
-func testPlan(t *testing.T, plan []lifecycle.Require, paths ...string) {
+func testPlan(t *testing.T, plan []buildpack.Require, paths ...string) {
 	t.Helper()
 	for _, p := range paths {
 		var c struct {
-			Entries []lifecycle.Require `toml:"entries"`
+			Entries []buildpack.Require `toml:"entries"`
 		}
 		if _, err := toml.DecodeFile(p, &c); err != nil {
 			t.Fatalf("Error: %s\n", err)

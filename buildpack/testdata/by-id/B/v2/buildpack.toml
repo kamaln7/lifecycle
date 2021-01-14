@@ -1,0 +1,6 @@
+api = "0.2"
+
+[buildpack]
+id = "B"
+name = "Buildpack B"
+version = "v2"

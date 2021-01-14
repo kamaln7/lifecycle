@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 
+	"github.com/buildpacks/lifecycle/buildpack"
+
 	"github.com/buildpacks/imgutil"
 	"github.com/buildpacks/imgutil/local"
 	"github.com/buildpacks/imgutil/remote"
@@ -125,7 +127,7 @@ func (a *analyzeCmd) Exec() error {
 	return nil
 }
 
-func (aa analyzeArgs) analyze(group lifecycle.BuildpackGroup, cacheStore lifecycle.Cache) (lifecycle.AnalyzedMetadata, error) {
+func (aa analyzeArgs) analyze(group buildpack.BuildpackGroup, cacheStore lifecycle.Cache) (lifecycle.AnalyzedMetadata, error) {
 	var (
 		img imgutil.Image
 		err error

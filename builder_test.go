@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/buildpacks/lifecycle/buildpack"
+
 	"github.com/golang/mock/gomock"
 	"github.com/google/go-cmp/cmp"
 	"github.com/pkg/errors"
@@ -41,7 +43,7 @@ func testBuilder(t *testing.T, when spec.G, it spec.S) {
 		platformDir    string
 		appDir         string
 		layersDir      string
-		config         lifecycle.BuildConfig
+		config         buildpack.BuildConfig
 	)
 
 	it.Before(func() {
@@ -66,8 +68,8 @@ func testBuilder(t *testing.T, when spec.G, it spec.S) {
 			PlatformDir: platformDir,
 			PlatformAPI: api.Platform.Latest(),
 			Env:         mockEnv,
-			Group: lifecycle.BuildpackGroup{
-				Group: []lifecycle.GroupBuildpack{
+			Group: buildpack.BuildpackGroup{
+				Group: []buildpack.GroupBuildpack{
 					{ID: "A", Version: "v1", API: "0.5", Homepage: "Buildpack A Homepage"},
 					{ID: "B", Version: "v2", API: "0.2"},
 				},
@@ -91,31 +93,31 @@ func testBuilder(t *testing.T, when spec.G, it spec.S) {
 	when("#Build", func() {
 		when("building succeeds", func() {
 			it("should provide a subset of the build plan to each buildpack", func() {
-				builder.Plan = lifecycle.BuildPlan{
-					Entries: []lifecycle.BuildPlanEntry{
+				builder.Plan = buildpack.BuildPlan{
+					Entries: []buildpack.BuildPlanEntry{
 						{
-							Providers: []lifecycle.GroupBuildpack{
+							Providers: []buildpack.GroupBuildpack{
 								{ID: "A", Version: "v1"},
 								{ID: "B", Version: "v2"},
 							},
-							Requires: []lifecycle.Require{
+							Requires: []buildpack.Require{
 								{Name: "some-dep", Version: "v1"}, // not provided to buildpack B because it is met
 							},
 						},
 						{
-							Providers: []lifecycle.GroupBuildpack{
+							Providers: []buildpack.GroupBuildpack{
 								{ID: "A", Version: "v1"},
 								{ID: "B", Version: "v2"},
 							},
-							Requires: []lifecycle.Require{
+							Requires: []buildpack.Require{
 								{Name: "some-unmet-dep", Version: "v2"}, // provided to buildpack B because it is unmet
 							},
 						},
 						{
-							Providers: []lifecycle.GroupBuildpack{
+							Providers: []buildpack.GroupBuildpack{
 								{ID: "B", Version: "v2"},
 							},
-							Requires: []lifecycle.Require{
+							Requires: []buildpack.Require{
 								{Name: "other-dep", Version: "v4"}, // only provided to buildpack B
 							},
 						},
@@ -124,15 +126,15 @@ func testBuilder(t *testing.T, when spec.G, it spec.S) {
 				bpA := testmock.NewMockBuildpack(mockCtrl)
 				bpB := testmock.NewMockBuildpack(mockCtrl)
 				buildpackStore.EXPECT().Lookup("A", "v1").Return(bpA, nil)
-				expectedPlanA := lifecycle.BuildpackPlan{Entries: []lifecycle.Require{
+				expectedPlanA := buildpack.BuildpackPlan{Entries: []buildpack.Require{
 					{Name: "some-dep", Version: "v1"},
 					{Name: "some-unmet-dep", Version: "v2"},
 				}}
-				bpA.EXPECT().Build(expectedPlanA, config).Return(lifecycle.BuildResult{
+				bpA.EXPECT().Build(expectedPlanA, config).Return(buildpack.BuildResult{
 					MetRequires: []string{"some-dep"},
 				}, nil)
 				buildpackStore.EXPECT().Lookup("B", "v2").Return(bpB, nil)
-				expectedPlanB := lifecycle.BuildpackPlan{Entries: []lifecycle.Require{
+				expectedPlanB := buildpack.BuildpackPlan{Entries: []buildpack.Require{
 					{Name: "some-unmet-dep", Version: "v2"},
 					{Name: "other-dep", Version: "v4"},
 				}}
@@ -147,34 +149,34 @@ func testBuilder(t *testing.T, when spec.G, it spec.S) {
 			when("build metadata", func() {
 				when("bom", func() {
 					it("should aggregate BOM from each buildpack", func() {
-						builder.Group.Group = []lifecycle.GroupBuildpack{
+						builder.Group.Group = []buildpack.GroupBuildpack{
 							{ID: "A", Version: "v1", API: "0.5", Homepage: "Buildpack A Homepage"},
 							{ID: "B", Version: "v2", API: "0.2"},
 						}
 
 						bpA := testmock.NewMockBuildpack(mockCtrl)
 						buildpackStore.EXPECT().Lookup("A", "v1").Return(bpA, nil)
-						bpA.EXPECT().Build(gomock.Any(), config).Return(lifecycle.BuildResult{
-							BOM: []lifecycle.BOMEntry{
+						bpA.EXPECT().Build(gomock.Any(), config).Return(buildpack.BuildResult{
+							BOM: []buildpack.BOMEntry{
 								{
-									Require: lifecycle.Require{
+									Require: buildpack.Require{
 										Name:     "dep1",
 										Metadata: map[string]interface{}{"version": "v1"},
 									},
-									Buildpack: lifecycle.GroupBuildpack{ID: "A", Version: "v1"},
+									Buildpack: buildpack.GroupBuildpack{ID: "A", Version: "v1"},
 								},
 							},
 						}, nil)
 						bpB := testmock.NewMockBuildpack(mockCtrl)
 						buildpackStore.EXPECT().Lookup("B", "v2").Return(bpB, nil)
-						bpB.EXPECT().Build(gomock.Any(), config).Return(lifecycle.BuildResult{
-							BOM: []lifecycle.BOMEntry{
+						bpB.EXPECT().Build(gomock.Any(), config).Return(buildpack.BuildResult{
+							BOM: []buildpack.BOMEntry{
 								{
-									Require: lifecycle.Require{
+									Require: buildpack.Require{
 										Name:     "dep2",
 										Metadata: map[string]interface{}{"version": "v1"},
 									},
-									Buildpack: lifecycle.GroupBuildpack{ID: "B", Version: "v2"},
+									Buildpack: buildpack.GroupBuildpack{ID: "B", Version: "v2"},
 								},
 							},
 						}, nil)
@@ -183,22 +185,22 @@ func testBuilder(t *testing.T, when spec.G, it spec.S) {
 						if err != nil {
 							t.Fatalf("Unexpected error:\n%s\n", err)
 						}
-						if s := cmp.Diff(metadata.BOM, []lifecycle.BOMEntry{
+						if s := cmp.Diff(metadata.BOM, []buildpack.BOMEntry{
 							{
-								Require: lifecycle.Require{
+								Require: buildpack.Require{
 									Name:     "dep1",
 									Version:  "",
 									Metadata: map[string]interface{}{"version": string("v1")},
 								},
-								Buildpack: lifecycle.GroupBuildpack{ID: "A", Version: "v1"},
+								Buildpack: buildpack.GroupBuildpack{ID: "A", Version: "v1"},
 							},
 							{
-								Require: lifecycle.Require{
+								Require: buildpack.Require{
 									Name:     "dep2",
 									Version:  "",
 									Metadata: map[string]interface{}{"version": string("v1")},
 								},
-								Buildpack: lifecycle.GroupBuildpack{ID: "B", Version: "v2"},
+								Buildpack: buildpack.GroupBuildpack{ID: "B", Version: "v2"},
 							},
 						}); s != "" {
 							t.Fatalf("Unexpected:\n%s\n", s)
@@ -219,7 +221,7 @@ func testBuilder(t *testing.T, when spec.G, it spec.S) {
 						if err != nil {
 							t.Fatalf("Unexpected error:\n%s\n", err)
 						}
-						if s := cmp.Diff(metadata.Buildpacks, []lifecycle.GroupBuildpack{
+						if s := cmp.Diff(metadata.Buildpacks, []buildpack.GroupBuildpack{
 							{ID: "A", Version: "v1", API: "0.5", Homepage: "Buildpack A Homepage"},
 							{ID: "B", Version: "v2", API: "0.2"},
 						}); s != "" {
@@ -232,16 +234,16 @@ func testBuilder(t *testing.T, when spec.G, it spec.S) {
 					it("should aggregate labels from each buildpack", func() {
 						bpA := testmock.NewMockBuildpack(mockCtrl)
 						buildpackStore.EXPECT().Lookup("A", "v1").Return(bpA, nil)
-						bpA.EXPECT().Build(gomock.Any(), config).Return(lifecycle.BuildResult{
-							Labels: []lifecycle.Label{
+						bpA.EXPECT().Build(gomock.Any(), config).Return(buildpack.BuildResult{
+							Labels: []buildpack.Label{
 								{Key: "some-bpA-key", Value: "some-bpA-value"},
 								{Key: "some-other-bpA-key", Value: "some-other-bpA-value"},
 							},
 						}, nil)
 						bpB := testmock.NewMockBuildpack(mockCtrl)
 						buildpackStore.EXPECT().Lookup("B", "v2").Return(bpB, nil)
-						bpB.EXPECT().Build(gomock.Any(), config).Return(lifecycle.BuildResult{
-							Labels: []lifecycle.Label{
+						bpB.EXPECT().Build(gomock.Any(), config).Return(buildpack.BuildResult{
+							Labels: []buildpack.Label{
 								{Key: "some-bpB-key", Value: "some-bpB-value"},
 								{Key: "some-other-bpB-key", Value: "some-other-bpB-value"},
 							},
@@ -251,7 +253,7 @@ func testBuilder(t *testing.T, when spec.G, it spec.S) {
 						if err != nil {
 							t.Fatalf("Unexpected error:\n%s\n", err)
 						}
-						if s := cmp.Diff(metadata.Labels, []lifecycle.Label{
+						if s := cmp.Diff(metadata.Labels, []buildpack.Label{
 							{Key: "some-bpA-key", Value: "some-bpA-value"},
 							{Key: "some-other-bpA-key", Value: "some-other-bpA-value"},
 							{Key: "some-bpB-key", Value: "some-bpB-value"},
@@ -266,7 +268,7 @@ func testBuilder(t *testing.T, when spec.G, it spec.S) {
 					it("should override identical processes from earlier buildpacks", func() {
 						bpA := testmock.NewMockBuildpack(mockCtrl)
 						buildpackStore.EXPECT().Lookup("A", "v1").Return(bpA, nil)
-						bpA.EXPECT().Build(gomock.Any(), config).Return(lifecycle.BuildResult{
+						bpA.EXPECT().Build(gomock.Any(), config).Return(buildpack.BuildResult{
 							Processes: []launch.Process{
 								{
 									Type:        "some-type",
@@ -286,7 +288,7 @@ func testBuilder(t *testing.T, when spec.G, it spec.S) {
 						}, nil)
 						bpB := testmock.NewMockBuildpack(mockCtrl)
 						buildpackStore.EXPECT().Lookup("B", "v2").Return(bpB, nil)
-						bpB.EXPECT().Build(gomock.Any(), config).Return(lifecycle.BuildResult{
+						bpB.EXPECT().Build(gomock.Any(), config).Return(buildpack.BuildResult{
 							Processes: []launch.Process{
 								{
 									Type:        "some-other-type",
@@ -341,7 +343,7 @@ func testBuilder(t *testing.T, when spec.G, it spec.S) {
 					it("should aggregate slices from each buildpack", func() {
 						bpA := testmock.NewMockBuildpack(mockCtrl)
 						buildpackStore.EXPECT().Lookup("A", "v1").Return(bpA, nil)
-						bpA.EXPECT().Build(gomock.Any(), config).Return(lifecycle.BuildResult{
+						bpA.EXPECT().Build(gomock.Any(), config).Return(buildpack.BuildResult{
 							Slices: []layers.Slice{
 								{Paths: []string{"some-bpA-path", "some-other-bpA-path"}},
 								{Paths: []string{"duplicate-path"}},
@@ -350,7 +352,7 @@ func testBuilder(t *testing.T, when spec.G, it spec.S) {
 						}, nil)
 						bpB := testmock.NewMockBuildpack(mockCtrl)
 						buildpackStore.EXPECT().Lookup("B", "v2").Return(bpB, nil)
-						bpB.EXPECT().Build(gomock.Any(), config).Return(lifecycle.BuildResult{
+						bpB.EXPECT().Build(gomock.Any(), config).Return(buildpack.BuildResult{
 							Slices: []layers.Slice{
 								{Paths: []string{"some-bpB-path", "some-other-bpB-path"}},
 								{Paths: []string{"duplicate-path"}},
@@ -380,7 +382,7 @@ func testBuilder(t *testing.T, when spec.G, it spec.S) {
 				it("should error", func() {
 					bpA := testmock.NewMockBuildpack(mockCtrl)
 					buildpackStore.EXPECT().Lookup("A", "v1").Return(bpA, nil)
-					bpA.EXPECT().Build(gomock.Any(), config).Return(lifecycle.BuildResult{}, errors.New("some error"))
+					bpA.EXPECT().Build(gomock.Any(), config).Return(buildpack.BuildResult{}, errors.New("some error"))
 
 					if _, err := builder.Build(); err == nil {
 						t.Fatal("Expected error.\n")
@@ -394,10 +396,10 @@ func testBuilder(t *testing.T, when spec.G, it spec.S) {
 				it("should error", func() {
 					bpA := testmock.NewMockBuildpack(mockCtrl)
 					buildpackStore.EXPECT().Lookup("A", "v1").Return(bpA, nil)
-					bpA.EXPECT().Build(gomock.Any(), config).Return(lifecycle.BuildResult{}, nil)
+					bpA.EXPECT().Build(gomock.Any(), config).Return(buildpack.BuildResult{}, nil)
 					bpB := testmock.NewMockBuildpack(mockCtrl)
 					buildpackStore.EXPECT().Lookup("B", "v2").Return(bpB, nil)
-					bpB.EXPECT().Build(gomock.Any(), config).Return(lifecycle.BuildResult{}, errors.New("some error"))
+					bpB.EXPECT().Build(gomock.Any(), config).Return(buildpack.BuildResult{}, errors.New("some error"))
 
 					if _, err := builder.Build(); err == nil {
 						t.Fatal("Expected error.\n")
@@ -418,14 +420,14 @@ func testBuilder(t *testing.T, when spec.G, it spec.S) {
 					it("should convert metadata.version to top level version", func() {
 						bpA := testmock.NewMockBuildpack(mockCtrl)
 						buildpackStore.EXPECT().Lookup("A", "v1").Return(bpA, nil)
-						bpA.EXPECT().Build(gomock.Any(), config).Return(lifecycle.BuildResult{
-							BOM: []lifecycle.BOMEntry{
+						bpA.EXPECT().Build(gomock.Any(), config).Return(buildpack.BuildResult{
+							BOM: []buildpack.BOMEntry{
 								{
-									Require: lifecycle.Require{
+									Require: buildpack.Require{
 										Name:     "dep1",
 										Metadata: map[string]interface{}{"version": string("v1")},
 									},
-									Buildpack: lifecycle.GroupBuildpack{ID: "A", Version: "v1"},
+									Buildpack: buildpack.GroupBuildpack{ID: "A", Version: "v1"},
 								},
 							},
 						}, nil)
@@ -438,14 +440,14 @@ func testBuilder(t *testing.T, when spec.G, it spec.S) {
 							t.Fatalf("Unexpected error:\n%s\n", err)
 						}
 
-						if s := cmp.Diff(metadata.BOM, []lifecycle.BOMEntry{
+						if s := cmp.Diff(metadata.BOM, []buildpack.BOMEntry{
 							{
-								Require: lifecycle.Require{
+								Require: buildpack.Require{
 									Name:     "dep1",
 									Version:  "v1",
 									Metadata: map[string]interface{}{"version": string("v1")},
 								},
-								Buildpack: lifecycle.GroupBuildpack{ID: "A", Version: "v1"},
+								Buildpack: buildpack.GroupBuildpack{ID: "A", Version: "v1"},
 							},
 						}); s != "" {
 							t.Fatalf("Unexpected:\n%s\n", s)

@@ -6,8 +6,10 @@ import (
 	"os"
 
 	"github.com/buildpacks/lifecycle"
+	"github.com/buildpacks/lifecycle/buildpack"
 	"github.com/buildpacks/lifecycle/cmd"
 	"github.com/buildpacks/lifecycle/env"
+	lerrors "github.com/buildpacks/lifecycle/errors"
 	"github.com/buildpacks/lifecycle/priv"
 )
 
@@ -72,51 +74,53 @@ func (d *detectCmd) Exec() error {
 	return d.writeData(group, plan)
 }
 
-func (da detectArgs) detect() (lifecycle.BuildpackGroup, lifecycle.BuildPlan, error) {
+func (da detectArgs) detect() (buildpack.BuildpackGroup, buildpack.BuildPlan, error) {
 	order, err := lifecycle.ReadOrder(da.orderPath)
 	if err != nil {
-		return lifecycle.BuildpackGroup{}, lifecycle.BuildPlan{}, cmd.FailErr(err, "read buildpack order file")
+		return buildpack.BuildpackGroup{}, buildpack.BuildPlan{}, cmd.FailErr(err, "read buildpack order file")
 	}
 	if err := da.verifyBuildpackApis(order); err != nil {
-		return lifecycle.BuildpackGroup{}, lifecycle.BuildPlan{}, err
+		return buildpack.BuildpackGroup{}, buildpack.BuildPlan{}, err
 	}
 
 	envv := env.NewBuildEnv(os.Environ())
 	fullEnv, err := envv.WithPlatform(da.platformDir)
 	if err != nil {
-		return lifecycle.BuildpackGroup{}, lifecycle.BuildPlan{}, cmd.FailErr(err, "read full env")
+		return buildpack.BuildpackGroup{}, buildpack.BuildPlan{}, cmd.FailErr(err, "read full env")
 	}
-	group, plan, err := order.Detect(&lifecycle.DetectConfig{
-		FullEnv:       fullEnv,
-		ClearEnv:      envv.List(),
-		AppDir:        da.appDir,
-		PlatformDir:   da.platformDir,
-		BuildpacksDir: da.buildpacksDir,
-		Logger:        cmd.DefaultLogger,
+	group, plan, err := order.Detect(&lifecycle.Detector{
+		XConfig: buildpack.DetectConfig{
+			FullEnv:       fullEnv,
+			ClearEnv:      envv.List(),
+			AppDir:        da.appDir,
+			PlatformDir:   da.platformDir,
+			BuildpacksDir: da.buildpacksDir,
+		},
+		XLogger: cmd.DefaultLogger,
 	})
 	if err != nil {
 		switch err := err.(type) {
-		case *lifecycle.Error:
+		case *lerrors.Error:
 			switch err.Type {
-			case lifecycle.ErrTypeFailedDetection:
+			case lerrors.ErrTypeFailedDetection:
 				cmd.DefaultLogger.Error("No buildpack groups passed detection.")
 				cmd.DefaultLogger.Error("Please check that you are running against the correct path.")
-				return lifecycle.BuildpackGroup{}, lifecycle.BuildPlan{}, cmd.FailErrCode(err, cmd.CodeFailedDetect, "detect")
-			case lifecycle.ErrTypeBuildpack:
+				return buildpack.BuildpackGroup{}, buildpack.BuildPlan{}, cmd.FailErrCode(err, cmd.CodeFailedDetect, "detect")
+			case lerrors.ErrTypeBuildpack:
 				cmd.DefaultLogger.Error("No buildpack groups passed detection.")
-				return lifecycle.BuildpackGroup{}, lifecycle.BuildPlan{}, cmd.FailErrCode(err, cmd.CodeFailedDetectWithErrors, "detect")
+				return buildpack.BuildpackGroup{}, buildpack.BuildPlan{}, cmd.FailErrCode(err, cmd.CodeFailedDetectWithErrors, "detect")
 			default:
-				return lifecycle.BuildpackGroup{}, lifecycle.BuildPlan{}, cmd.FailErrCode(err, cmd.CodeDetectError, "detect")
+				return buildpack.BuildpackGroup{}, buildpack.BuildPlan{}, cmd.FailErrCode(err, cmd.CodeDetectError, "detect")
 			}
 		default:
-			return lifecycle.BuildpackGroup{}, lifecycle.BuildPlan{}, cmd.FailErrCode(err, cmd.CodeDetectError, "detect")
+			return buildpack.BuildpackGroup{}, buildpack.BuildPlan{}, cmd.FailErrCode(err, cmd.CodeDetectError, "detect")
 		}
 	}
 
 	return group, plan, nil
 }
 
-func (da detectArgs) verifyBuildpackApis(order lifecycle.BuildpackOrder) error {
+func (da detectArgs) verifyBuildpackApis(order buildpack.BuildpackOrder) error {
 	for _, group := range order {
 		for _, bp := range group.Group {
 			bpTOML, err := bp.Lookup(da.buildpacksDir)
@@ -131,7 +135,7 @@ func (da detectArgs) verifyBuildpackApis(order lifecycle.BuildpackOrder) error {
 	return nil
 }
 
-func (d *detectCmd) writeData(group lifecycle.BuildpackGroup, plan lifecycle.BuildPlan) error {
+func (d *detectCmd) writeData(group buildpack.BuildpackGroup, plan buildpack.BuildPlan) error {
 	if err := lifecycle.WriteTOML(d.groupPath, group); err != nil {
 		return cmd.FailErr(err, "write buildpack group")
 	}

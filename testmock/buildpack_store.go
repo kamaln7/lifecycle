@@ -5,11 +5,9 @@
 package testmock
 
 import (
-	reflect "reflect"
-
+	buildpack "github.com/buildpacks/lifecycle/buildpack"
 	gomock "github.com/golang/mock/gomock"
-
-	lifecycle "github.com/buildpacks/lifecycle"
+	reflect "reflect"
 )
 
 // MockBuildpackStore is a mock of BuildpackStore interface
@@ -36,10 +34,10 @@ func (m *MockBuildpackStore) EXPECT() *MockBuildpackStoreMockRecorder {
 }
 
 // Lookup mocks base method
-func (m *MockBuildpackStore) Lookup(arg0, arg1 string) (lifecycle.Buildpack, error) {
+func (m *MockBuildpackStore) Lookup(arg0, arg1 string) (buildpack.Buildpack, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Lookup", arg0, arg1)
-	ret0, _ := ret[0].(lifecycle.Buildpack)
+	ret0, _ := ret[0].(buildpack.Buildpack)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

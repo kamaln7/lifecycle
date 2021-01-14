@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/buildpacks/lifecycle/buildpack"
+
 	"github.com/apex/log"
 	"github.com/apex/log/handlers/memory"
 	"github.com/buildpacks/imgutil/fakes"
@@ -133,7 +135,7 @@ func testExporter(t *testing.T, when spec.G, it spec.S) {
 			}).AnyTimes()
 
 		exporter = &lifecycle.Exporter{
-			Buildpacks: []lifecycle.GroupBuildpack{
+			Buildpacks: []buildpack.GroupBuildpack{
 				{ID: "buildpack.id", Version: "1.2.3"},
 				{ID: "other.buildpack.id", Version: "4.5.6", Optional: false},
 			},
@@ -1120,7 +1122,7 @@ version = "4.5.6"
 			when("platform api >= 0.5", func() {
 				it.Before(func() {
 					exporter.PlatformAPI = api.MustParse("0.5")
-					exporter.Buildpacks = []lifecycle.GroupBuildpack{
+					exporter.Buildpacks = []buildpack.GroupBuildpack{
 						{ID: "buildpack.id", Version: "1.2.3", API: "0.5"},                        // set buildpack API to 0.5
 						{ID: "other.buildpack.id", Version: "4.5.6", Optional: false, API: "0.5"}, // set buildpack API to 0.5
 					}
@@ -1135,20 +1137,20 @@ version = "4.5.6"
 						report, err := exporter.Export(opts)
 						h.AssertNil(t, err)
 
-						h.AssertEq(t, report.Build.BOM, []lifecycle.BOMEntry{
+						h.AssertEq(t, report.Build.BOM, []buildpack.BOMEntry{
 							{
-								Require: lifecycle.Require{
+								Require: buildpack.Require{
 									Name:     "dep1",
 									Metadata: map[string]interface{}{"version": string("v1")},
 								},
-								Buildpack: lifecycle.GroupBuildpack{ID: "buildpack.id", Version: "1.2.3"},
+								Buildpack: buildpack.GroupBuildpack{ID: "buildpack.id", Version: "1.2.3"},
 							},
 							{
-								Require: lifecycle.Require{
+								Require: buildpack.Require{
 									Name:     "dep2",
 									Metadata: map[string]interface{}{"version": string("v1")},
 								},
-								Buildpack: lifecycle.GroupBuildpack{ID: "other.buildpack.id", Version: "4.5.6"},
+								Buildpack: buildpack.GroupBuildpack{ID: "other.buildpack.id", Version: "4.5.6"},
 							},
 						})
 					})
@@ -1169,7 +1171,7 @@ version = "4.5.6"
 
 		when("buildpack requires an escaped id", func() {
 			it.Before(func() {
-				exporter.Buildpacks = []lifecycle.GroupBuildpack{{ID: "some/escaped/bp/id"}}
+				exporter.Buildpacks = []buildpack.GroupBuildpack{{ID: "some/escaped/bp/id"}}
 
 				h.RecursiveCopy(t, filepath.Join("testdata", "exporter", "escaped-bpid", "layers"), opts.LayersDir)
 			})

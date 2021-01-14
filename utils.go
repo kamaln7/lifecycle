@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/buildpacks/lifecycle/buildpack"
+
 	"github.com/BurntSushi/toml"
 	"github.com/buildpacks/imgutil"
 	"github.com/pkg/errors"
@@ -23,15 +25,15 @@ func WriteTOML(path string, data interface{}) error {
 	return toml.NewEncoder(f).Encode(data)
 }
 
-func ReadGroup(path string) (BuildpackGroup, error) {
-	var group BuildpackGroup
+func ReadGroup(path string) (buildpack.BuildpackGroup, error) {
+	var group buildpack.BuildpackGroup
 	_, err := toml.DecodeFile(path, &group)
 	return group, err
 }
 
-func ReadOrder(path string) (BuildpackOrder, error) {
+func ReadOrder(path string) (buildpack.BuildpackOrder, error) {
 	var order struct {
-		Order BuildpackOrder `toml:"order"`
+		Order buildpack.BuildpackOrder `toml:"order"`
 	}
 	_, err := toml.DecodeFile(path, &order)
 	return order.Order, err

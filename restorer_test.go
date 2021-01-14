@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/buildpacks/lifecycle/buildpack"
+
 	"github.com/apex/log"
 	"github.com/apex/log/handlers/discard"
 	"github.com/pkg/errors"
@@ -47,7 +49,7 @@ func testRestorer(t *testing.T, when spec.G, it spec.S) {
 
 			restorer = &lifecycle.Restorer{
 				LayersDir: layersDir,
-				Buildpacks: []lifecycle.GroupBuildpack{
+				Buildpacks: []buildpack.GroupBuildpack{
 					{ID: "buildpack.id"},
 					{ID: "escaped/buildpack/id"},
 				},
@@ -354,7 +356,7 @@ func testRestorer(t *testing.T, when spec.G, it spec.S) {
 
 				when("the buildpack is detected", func() {
 					it.Before(func() {
-						restorer.Buildpacks = []lifecycle.GroupBuildpack{{ID: "nogroup.buildpack.id"}}
+						restorer.Buildpacks = []buildpack.GroupBuildpack{{ID: "nogroup.buildpack.id"}}
 						h.AssertNil(t, restorer.Restore(testCache))
 					})
 

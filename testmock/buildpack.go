@@ -5,11 +5,9 @@
 package testmock
 
 import (
-	reflect "reflect"
-
+	buildpack "github.com/buildpacks/lifecycle/buildpack"
 	gomock "github.com/golang/mock/gomock"
-
-	lifecycle "github.com/buildpacks/lifecycle"
+	reflect "reflect"
 )
 
 // MockBuildpack is a mock of Buildpack interface
@@ -36,10 +34,10 @@ func (m *MockBuildpack) EXPECT() *MockBuildpackMockRecorder {
 }
 
 // Build mocks base method
-func (m *MockBuildpack) Build(arg0 lifecycle.BuildpackPlan, arg1 lifecycle.BuildConfig) (lifecycle.BuildResult, error) {
+func (m *MockBuildpack) Build(arg0 buildpack.BuildpackPlan, arg1 buildpack.BuildConfig) (buildpack.BuildResult, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Build", arg0, arg1)
-	ret0, _ := ret[0].(lifecycle.BuildResult)
+	ret0, _ := ret[0].(buildpack.BuildResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

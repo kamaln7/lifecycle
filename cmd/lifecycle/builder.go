@@ -5,6 +5,9 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/buildpacks/lifecycle/buildpack"
+	errors2 "github.com/buildpacks/lifecycle/errors"
+
 	"github.com/BurntSushi/toml"
 
 	"github.com/buildpacks/lifecycle"
@@ -75,7 +78,7 @@ func (b *buildCmd) Exec() error {
 	return b.build(group, plan)
 }
 
-func (ba buildArgs) build(group lifecycle.BuildpackGroup, plan lifecycle.BuildPlan) error {
+func (ba buildArgs) build(group buildpack.BuildpackGroup, plan buildpack.BuildPlan) error {
 	buildpacksDir, err := filepath.Abs(ba.buildpacksDir)
 	if err != nil {
 		return cmd.FailErrCode(err, cmd.CodeBuildError, "build")
@@ -91,13 +94,13 @@ func (ba buildArgs) build(group lifecycle.BuildpackGroup, plan lifecycle.BuildPl
 		Plan:           plan,
 		Out:            cmd.Stdout,
 		Err:            cmd.Stderr,
-		BuildpackStore: &lifecycle.DirBuildpackStore{Dir: buildpacksDir},
+		BuildpackStore: &buildpack.DirBuildpackStore{Dir: buildpacksDir},
 	}
 	md, err := builder.Build()
 
 	if err != nil {
-		if err, ok := err.(*lifecycle.Error); ok {
-			if err.Type == lifecycle.ErrTypeBuildpack {
+		if err, ok := err.(*errors2.Error); ok {
+			if err.Type == errors2.ErrTypeBuildpack {
 				return cmd.FailErrCode(err.Cause(), cmd.CodeFailedBuildWithErrors, "build")
 			}
 		}
@@ -110,15 +113,15 @@ func (ba buildArgs) build(group lifecycle.BuildpackGroup, plan lifecycle.BuildPl
 	return nil
 }
 
-func (b *buildCmd) readData() (lifecycle.BuildpackGroup, lifecycle.BuildPlan, error) {
+func (b *buildCmd) readData() (buildpack.BuildpackGroup, buildpack.BuildPlan, error) {
 	group, err := lifecycle.ReadGroup(b.groupPath)
 	if err != nil {
-		return lifecycle.BuildpackGroup{}, lifecycle.BuildPlan{}, cmd.FailErr(err, "read buildpack group")
+		return buildpack.BuildpackGroup{}, buildpack.BuildPlan{}, cmd.FailErr(err, "read buildpack group")
 	}
 
-	var plan lifecycle.BuildPlan
+	var plan buildpack.BuildPlan
 	if _, err := toml.DecodeFile(b.planPath, &plan); err != nil {
-		return lifecycle.BuildpackGroup{}, lifecycle.BuildPlan{}, cmd.FailErr(err, "parse detect plan")
+		return buildpack.BuildpackGroup{}, buildpack.BuildPlan{}, cmd.FailErr(err, "parse detect plan")
 	}
 	return group, plan, nil
 }

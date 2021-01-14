@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/buildpacks/lifecycle/buildpack"
+
 	"github.com/apex/log"
 	"github.com/apex/log/handlers/memory"
 	"github.com/golang/mock/gomock"
@@ -59,7 +61,7 @@ func testCache(t *testing.T, when spec.G, it spec.S) {
 			logHandler = memory.New()
 
 			exporter = &lifecycle.Exporter{
-				Buildpacks: []lifecycle.GroupBuildpack{
+				Buildpacks: []buildpack.GroupBuildpack{
 					{ID: "buildpack.id"},
 					{ID: "other.buildpack.id"},
 				},

@@ -206,7 +206,7 @@ format: install-goimports
 test: unit acceptance
 
 unit: UNIT_PACKAGES=$(shell $(GOCMD) list ./... | grep -v acceptance)
-unit: format lint install-yj
+unit: format install-yj
 	@echo "> Running unit tests..."
 	$(GOTEST) -v -count=1 $(UNIT_PACKAGES)
 

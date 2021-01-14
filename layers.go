@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/buildpacks/lifecycle/buildpack"
+
 	"github.com/BurntSushi/toml"
 	"github.com/pkg/errors"
 
@@ -19,11 +21,11 @@ type bpLayersDir struct {
 	path      string
 	layers    []bpLayer
 	name      string
-	buildpack GroupBuildpack
+	buildpack buildpack.GroupBuildpack
 	store     *StoreTOML
 }
 
-func readBuildpackLayersDir(layersDir string, buildpack GroupBuildpack) (bpLayersDir, error) {
+func readBuildpackLayersDir(layersDir string, buildpack buildpack.GroupBuildpack) (bpLayersDir, error) {
 	path := filepath.Join(layersDir, launch.EscapeID(buildpack.ID))
 	bpDir := bpLayersDir{
 		name:      buildpack.ID,

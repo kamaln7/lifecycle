@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"github.com/buildpacks/lifecycle/buildpack"
+
 	"github.com/buildpacks/imgutil"
 	"github.com/pkg/errors"
 
@@ -11,7 +13,7 @@ import (
 )
 
 type Analyzer struct {
-	Buildpacks []GroupBuildpack
+	Buildpacks []buildpack.GroupBuildpack
 	LayersDir  string
 	Logger     Logger
 	SkipLayers bool

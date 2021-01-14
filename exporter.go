@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/buildpacks/lifecycle/buildpack"
+
 	"github.com/BurntSushi/toml"
 	"github.com/buildpacks/imgutil"
 	"github.com/pkg/errors"
@@ -30,7 +32,7 @@ type Cache interface {
 }
 
 type Exporter struct {
-	Buildpacks   []GroupBuildpack
+	Buildpacks   []buildpack.GroupBuildpack
 	LayerFactory LayerFactory
 	Logger       Logger
 	PlatformAPI  *api.Version
@@ -68,7 +70,7 @@ type ExportReport struct {
 }
 
 type BuildReport struct {
-	BOM []BOMEntry `toml:"bom"`
+	BOM []buildpack.BOMEntry `toml:"bom"`
 }
 
 type ImageReport struct {
@@ -437,7 +439,7 @@ func (e *Exporter) makeBuildReport(layersDir string) (BuildReport, error) {
 	if e.PlatformAPI.Compare(api.MustParse("0.5")) < 0 { // platform API < 0.5
 		return BuildReport{}, nil
 	}
-	var out []BOMEntry
+	var out []buildpack.BOMEntry
 	for _, bp := range e.Buildpacks {
 		if api.MustParse(bp.API).Compare(api.MustParse("0.5")) < 0 { // buildpack API < 0.5
 			continue
@@ -447,7 +449,7 @@ func (e *Exporter) makeBuildReport(layersDir string) (BuildReport, error) {
 		if _, err := toml.DecodeFile(bpBuildTOML, &bpBuildReport); err != nil && !os.IsNotExist(err) {
 			return BuildReport{}, err
 		}
-		out = append(out, withBuildpack(bp, bpBuildReport.BOM)...)
+		out = append(out, buildpack.WithBuildpack(bp, bpBuildReport.BOM)...)
 	}
 	return BuildReport{BOM: out}, nil
 }
