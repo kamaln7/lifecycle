@@ -76,10 +76,10 @@ func (bo BuildpackOrder) detect(config *DetectConfig, processor Processor, done,
 	for _, group := range bo {
 		// FIXME: double-check slice safety here
 		found, plan, err := group.append(ngroup).detect(config, processor, done, wg)
-		if err == errBuildpack {
+		if err != nil && err.Error() == errBuildpack.Error() {
 			buildpackErr = true
 		}
-		if err == errFailedDetection || err == errBuildpack {
+		if err != nil && (err.Error() == errFailedDetection.Error() || err.Error() == errBuildpack.Error()) {
 			wg = &sync.WaitGroup{}
 			continue
 		}
