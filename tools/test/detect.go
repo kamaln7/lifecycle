@@ -1,8 +1,7 @@
-package lifecycle
+package buildpack
 
 import (
 	"bytes"
-	"fmt"
 	"io/ioutil"
 	"os"
 	"os/exec"
@@ -14,79 +13,22 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/buildpacks/lifecycle/api"
+	lerrors "github.com/buildpacks/lifecycle/errors"
 )
 
-const (
-	CodeDetectPass  = 0
-	CodeDetectFail  = 100
-	EnvBuildpackDir = "CNB_BUILDPACK_DIR"
-)
+const EnvBuildpackDir = "CNB_BUILDPACK_DIR"
 
 var (
 	errFailedDetection = errors.New("no buildpacks participating")
 	errBuildpack       = errors.New("buildpack(s) failed with err")
 )
 
-type BuildPlan struct {
-	Entries []BuildPlanEntry `toml:"entries"`
-}
-
-type BuildPlanEntry struct {
-	Providers []GroupBuildpack `toml:"providers"`
-	Requires  []Require        `toml:"requires"`
-}
-
-func (be BuildPlanEntry) noOpt() BuildPlanEntry {
-	var out []GroupBuildpack
-	for _, p := range be.Providers {
-		out = append(out, p.noOpt().noAPI().noHomepage())
-	}
-	be.Providers = out
-	return be
-}
-
-type Require struct {
-	Name     string                 `toml:"name" json:"name"`
-	Version  string                 `toml:"version,omitempty" json:"version,omitempty"`
-	Metadata map[string]interface{} `toml:"metadata" json:"metadata"`
-}
-
-func (r *Require) convertMetadataToVersion() {
-	if version, ok := r.Metadata["version"]; ok {
-		r.Version = fmt.Sprintf("%v", version)
-	}
-}
-
-func (r *Require) convertVersionToMetadata() {
-	if r.Version != "" {
-		if r.Metadata == nil {
-			r.Metadata = make(map[string]interface{})
-		}
-		r.Metadata["version"] = r.Version
-		r.Version = ""
-	}
-}
-
-func (r *Require) hasInconsistentVersions() bool {
-	if version, ok := r.Metadata["version"]; ok {
-		return r.Version != "" && r.Version != version
-	}
-	return false
-}
-
-func (r *Require) hasDoublySpecifiedVersions() bool {
-	if _, ok := r.Metadata["version"]; ok {
-		return r.Version != ""
-	}
-	return false
-}
-
-func (r *Require) hasTopLevelVersions() bool {
-	return r.Version != ""
-}
-
-type Provide struct {
-	Name string `toml:"name"`
+type Detector interface {
+	Config() DetectConfig
+	Logger() Logger
+	Process(done []GroupBuildpack) ([]GroupBuildpack, []BuildPlanEntry, error)
+	Runs() *sync.Map
+	SetRuns(runs *sync.Map)
 }
 
 type DetectConfig struct {
@@ -95,159 +37,194 @@ type DetectConfig struct {
 	AppDir        string
 	PlatformDir   string
 	BuildpacksDir string
-	Logger        Logger
-	runs          *sync.Map
 }
 
-func (c *DetectConfig) process(done []GroupBuildpack) ([]GroupBuildpack, []BuildPlanEntry, error) {
-	var runs []DetectRun
-	for _, bp := range done {
-		t, ok := c.runs.Load(bp.String())
-		if !ok {
-			return nil, nil, errors.Errorf("missing detection of '%s'", bp)
-		}
-		run := t.(DetectRun)
-		outputLogf := c.Logger.Debugf
+type Logger interface {
+	Debug(msg string)
+	Debugf(fmt string, v ...interface{})
 
-		switch run.Code {
-		case CodeDetectPass, CodeDetectFail:
-		default:
-			outputLogf = c.Logger.Infof
-		}
+	Info(msg string)
+	Infof(fmt string, v ...interface{})
 
-		if len(run.Output) > 0 {
-			outputLogf("======== Output: %s ========", bp)
-			outputLogf(string(run.Output))
+	Warn(msg string)
+	Warnf(fmt string, v ...interface{})
+
+	Error(msg string)
+	Errorf(fmt string, v ...interface{})
+}
+
+type BuildPlan struct {
+	Entries []BuildPlanEntry `toml:"entries"`
+}
+
+func (p BuildPlan) Find(bpID string) BuildpackPlan {
+	var out []Require
+	for _, entry := range p.Entries {
+		for _, provider := range entry.Providers {
+			if provider.ID == bpID {
+				out = append(out, entry.Requires...)
+				break
+			}
 		}
-		if run.Err != nil {
-			outputLogf("======== Error: %s ========", bp)
-			outputLogf(run.Err.Error())
-		}
-		runs = append(runs, run)
 	}
+	return BuildpackPlan{Entries: out}
+}
 
-	c.Logger.Debugf("======== Results ========")
+// TODO: ensure at least one claimed entry of each name is provided by the BP
+func (p BuildPlan) Filter(metRequires []string) BuildPlan {
+	var out []BuildPlanEntry
+	for _, planEntry := range p.Entries {
+		if !containsEntry(metRequires, planEntry) {
+			out = append(out, planEntry)
+		}
+	}
+	return BuildPlan{Entries: out}
+}
 
-	results := detectResults{}
-	detected := true
+func containsEntry(metRequires []string, entry BuildPlanEntry) bool {
+	for _, met := range metRequires {
+		for _, planReq := range entry.Requires {
+			if met == planReq.Name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+type BuildPlanEntry struct {
+	Providers []GroupBuildpack `toml:"providers"`
+	Requires  []Require        `toml:"requires"`
+}
+
+func (be BuildPlanEntry) NoOpt() BuildPlanEntry {
+	var out []GroupBuildpack
+	for _, p := range be.Providers {
+		out = append(out, p.NoOpt().NoAPI().NoHomepage())
+	}
+	be.Providers = out
+	return be
+}
+
+type Provide struct {
+	Name string `toml:"name"`
+}
+
+func (bo BuildpackOrder) Detect(detector Detector) (BuildpackGroup, BuildPlan, error) {
+	if detector.Runs() == nil {
+		detector.SetRuns(&sync.Map{})
+	}
+	bps, entries, err := bo.detect(nil, nil, false, &sync.WaitGroup{}, detector)
+	if err == errBuildpack {
+		err = lerrors.NewLifecycleError(err, lerrors.ErrTypeBuildpack)
+	} else if err == errFailedDetection {
+		err = lerrors.NewLifecycleError(err, lerrors.ErrTypeFailedDetection)
+	}
+	for i := range entries {
+		for j := range entries[i].Requires {
+			entries[i].Requires[j].convertVersionToMetadata()
+		}
+	}
+	return BuildpackGroup{Group: bps}, BuildPlan{Entries: entries}, err
+}
+
+func (bo BuildpackOrder) detect(done, next []GroupBuildpack, optional bool, wg *sync.WaitGroup, detector Detector) ([]GroupBuildpack, []BuildPlanEntry, error) {
+	ngroup := BuildpackGroup{Group: next}
 	buildpackErr := false
-	for i, bp := range done {
-		run := runs[i]
-		switch run.Code {
-		case CodeDetectPass:
-			c.Logger.Debugf("pass: %s", bp)
-			results = append(results, detectResult{bp, run})
-		case CodeDetectFail:
-			if bp.Optional {
-				c.Logger.Debugf("skip: %s", bp)
-			} else {
-				c.Logger.Debugf("fail: %s", bp)
-			}
-			detected = detected && bp.Optional
-		case -1:
-			c.Logger.Infof("err:  %s", bp)
+	for _, group := range bo {
+		// FIXME: double-check slice safety here
+		found, plan, err := group.append(ngroup).detect(done, wg, detector)
+		if err == errBuildpack {
 			buildpackErr = true
-			detected = detected && bp.Optional
-		default:
-			c.Logger.Infof("err:  %s (%d)", bp, run.Code)
-			buildpackErr = true
-			detected = detected && bp.Optional
 		}
-	}
-	if !detected {
-		if buildpackErr {
-			return nil, nil, errBuildpack
+		if err == errFailedDetection || err == errBuildpack {
+			wg = &sync.WaitGroup{}
+			continue
 		}
-		return nil, nil, errFailedDetection
+		return found, plan, err
+	}
+	if optional {
+		return ngroup.detect(done, wg, detector)
 	}
 
-	i := 0
-	deps, trial, err := results.runTrials(func(trial detectTrial) (depMap, detectTrial, error) {
-		i++
-		return c.runTrial(i, trial)
-	})
-	if err != nil {
-		return nil, nil, err
+	if buildpackErr {
+		return nil, nil, errBuildpack
 	}
-
-	if len(done) != len(trial) {
-		c.Logger.Infof("%d of %d buildpacks participating", len(trial), len(done))
-	}
-
-	maxLength := 0
-	for _, t := range trial {
-		l := len(t.ID)
-		if l > maxLength {
-			maxLength = l
-		}
-	}
-
-	f := fmt.Sprintf("%%-%ds %%s", maxLength)
-
-	for _, t := range trial {
-		c.Logger.Infof(f, t.ID, t.Version)
-	}
-
-	var found []GroupBuildpack
-	for _, r := range trial {
-		found = append(found, r.GroupBuildpack.noOpt())
-	}
-	var plan []BuildPlanEntry
-	for _, dep := range deps {
-		plan = append(plan, dep.BuildPlanEntry.noOpt())
-	}
-	return found, plan, nil
+	return nil, nil, errFailedDetection
 }
 
-func (c *DetectConfig) runTrial(i int, trial detectTrial) (depMap, detectTrial, error) {
-	c.Logger.Debugf("Resolving plan... (try #%d)", i)
-
-	var deps depMap
-	retry := true
-	for retry {
-		retry = false
-		deps = newDepMap(trial)
-
-		if err := deps.eachUnmetRequire(func(name string, bp GroupBuildpack) error {
-			retry = true
-			if !bp.Optional {
-				c.Logger.Debugf("fail: %s requires %s", bp, name)
-				return errFailedDetection
-			}
-			c.Logger.Debugf("skip: %s requires %s", bp, name)
-			trial = trial.remove(bp)
-			return nil
-		}); err != nil {
-			return nil, nil, err
-		}
-
-		if err := deps.eachUnmetProvide(func(name string, bp GroupBuildpack) error {
-			retry = true
-			if !bp.Optional {
-				c.Logger.Debugf("fail: %s provides unused %s", bp, name)
-				return errFailedDetection
-			}
-			c.Logger.Debugf("skip: %s provides unused %s", bp, name)
-			trial = trial.remove(bp)
-			return nil
-		}); err != nil {
-			return nil, nil, err
+func (bg BuildpackGroup) Detect(detector Detector) (BuildpackGroup, BuildPlan, error) {
+	if detector.Runs() == nil {
+		detector.SetRuns(&sync.Map{})
+	}
+	bps, entries, err := bg.detect(nil, &sync.WaitGroup{}, detector)
+	if err == errBuildpack {
+		err = lerrors.NewLifecycleError(err, lerrors.ErrTypeBuildpack)
+	} else if err == errFailedDetection {
+		err = lerrors.NewLifecycleError(err, lerrors.ErrTypeFailedDetection)
+	}
+	for i := range entries {
+		for j := range entries[i].Requires {
+			entries[i].Requires[j].convertVersionToMetadata()
 		}
 	}
-
-	if len(trial) == 0 {
-		c.Logger.Debugf("fail: no viable buildpacks in group")
-		return nil, nil, errFailedDetection
-	}
-	return deps, trial, nil
+	return BuildpackGroup{Group: bps}, BuildPlan{Entries: entries}, err
 }
 
-func (b *BuildpackTOML) Detect(c *DetectConfig) DetectRun {
-	appDir, err := filepath.Abs(c.AppDir)
+func (bg BuildpackGroup) detect(done []GroupBuildpack, wg *sync.WaitGroup, detector Detector) ([]GroupBuildpack, []BuildPlanEntry, error) {
+	for i, bp := range bg.Group {
+		key := bp.String()
+		if hasID(done, bp.ID) {
+			continue
+		}
+		info, err := bp.Lookup(detector.Config().BuildpacksDir)
+		if err != nil {
+			return nil, nil, err
+		}
+		bp.API = info.API
+		bp.Homepage = info.Buildpack.Homepage
+		if info.Order != nil {
+			// TODO: double-check slice safety here
+			// FIXME: cyclical references lead to infinite recursion
+			return info.Order.detect(done, bg.Group[i+1:], bp.Optional, wg, detector)
+		}
+		done = append(done, bp)
+		wg.Add(1)
+		go func() {
+			if _, ok := detector.Runs().Load(key); !ok {
+				detector.Runs().Store(key, info.Detect(detector))
+			}
+			wg.Done()
+		}()
+	}
+
+	wg.Wait()
+
+	return detector.Process(done)
+}
+
+func (bg BuildpackGroup) append(group ...BuildpackGroup) BuildpackGroup {
+	for _, g := range group {
+		bg.Group = append(bg.Group, g.Group...)
+	}
+	return bg
+}
+
+func hasID(bps []GroupBuildpack, id string) bool {
+	for _, bp := range bps {
+		if bp.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *BuildpackTOML) Detect(detector Detector) DetectRun { // TODO: config should be a pointer
+	appDir, err := filepath.Abs(detector.Config().AppDir)
 	if err != nil {
 		return DetectRun{Code: -1, Err: err}
 	}
-	platformDir, err := filepath.Abs(c.PlatformDir)
+	platformDir, err := filepath.Abs(detector.Config().PlatformDir)
 	if err != nil {
 		return DetectRun{Code: -1, Err: err}
 	}
@@ -271,9 +248,9 @@ func (b *BuildpackTOML) Detect(c *DetectConfig) DetectRun {
 	cmd.Dir = appDir
 	cmd.Stdout = out
 	cmd.Stderr = out
-	cmd.Env = c.FullEnv
+	cmd.Env = detector.Config().FullEnv
 	if b.Buildpack.ClearEnv {
-		cmd.Env = c.ClearEnv
+		cmd.Env = detector.Config().ClearEnv
 	}
 	cmd.Env = append(cmd.Env, EnvBuildpackDir+"="+b.Dir)
 
@@ -303,142 +280,27 @@ func (b *BuildpackTOML) Detect(c *DetectConfig) DetectRun {
 	}
 	if api.MustParse(b.API).Compare(api.MustParse("0.3")) >= 0 {
 		if t.hasTopLevelVersions() || t.Or.hasTopLevelVersions() {
-			c.Logger.Warnf(`Warning: buildpack %s has a "version" key. This key is deprecated in build plan requirements in buildpack API 0.3. "metadata.version" should be used instead`, b.Buildpack.ID)
+			detector.Logger().Warnf(`Warning: buildpack %s has a "version" key. This key is deprecated in build plan requirements in buildpack API 0.3. "metadata.version" should be used instead`, b.Buildpack.ID)
 		}
 	}
 	t.Output = out.Bytes()
 	return t
 }
 
-type BuildpackGroup struct {
-	Group []GroupBuildpack `toml:"group"`
-}
-
-func (bg BuildpackGroup) Detect(c *DetectConfig) (BuildpackGroup, BuildPlan, error) {
-	if c.runs == nil {
-		c.runs = &sync.Map{}
-	}
-	bps, entries, err := bg.detect(nil, &sync.WaitGroup{}, c)
-	if err == errBuildpack {
-		err = NewLifecycleError(err, ErrTypeBuildpack)
-	} else if err == errFailedDetection {
-		err = NewLifecycleError(err, ErrTypeFailedDetection)
-	}
-	for i := range entries {
-		for j := range entries[i].Requires {
-			entries[i].Requires[j].convertVersionToMetadata()
-		}
-	}
-	return BuildpackGroup{Group: bps}, BuildPlan{Entries: entries}, err
-}
-
-func (bg BuildpackGroup) detect(done []GroupBuildpack, wg *sync.WaitGroup, c *DetectConfig) ([]GroupBuildpack, []BuildPlanEntry, error) {
-	for i, bp := range bg.Group {
-		key := bp.String()
-		if hasID(done, bp.ID) {
-			continue
-		}
-		info, err := bp.Lookup(c.BuildpacksDir)
-		if err != nil {
-			return nil, nil, err
-		}
-		bp.API = info.API
-		bp.Homepage = info.Buildpack.Homepage
-		if info.Order != nil {
-			// TODO: double-check slice safety here
-			// FIXME: cyclical references lead to infinite recursion
-			return info.Order.detect(done, bg.Group[i+1:], bp.Optional, wg, c)
-		}
-		done = append(done, bp)
-		wg.Add(1)
-		go func() {
-			if _, ok := c.runs.Load(key); !ok {
-				c.runs.Store(key, info.Detect(c))
-			}
-			wg.Done()
-		}()
-	}
-
-	wg.Wait()
-
-	return c.process(done)
-}
-
-func (bg BuildpackGroup) append(group ...BuildpackGroup) BuildpackGroup {
-	for _, g := range group {
-		bg.Group = append(bg.Group, g.Group...)
-	}
-	return bg
-}
-
-type BuildpackOrder []BuildpackGroup
-
-func (bo BuildpackOrder) Detect(c *DetectConfig) (BuildpackGroup, BuildPlan, error) {
-	if c.runs == nil {
-		c.runs = &sync.Map{}
-	}
-	bps, entries, err := bo.detect(nil, nil, false, &sync.WaitGroup{}, c)
-	if err == errBuildpack {
-		err = NewLifecycleError(err, ErrTypeBuildpack)
-	} else if err == errFailedDetection {
-		err = NewLifecycleError(err, ErrTypeFailedDetection)
-	}
-	for i := range entries {
-		for j := range entries[i].Requires {
-			entries[i].Requires[j].convertVersionToMetadata()
-		}
-	}
-	return BuildpackGroup{Group: bps}, BuildPlan{Entries: entries}, err
-}
-
-func (bo BuildpackOrder) detect(done, next []GroupBuildpack, optional bool, wg *sync.WaitGroup, c *DetectConfig) ([]GroupBuildpack, []BuildPlanEntry, error) {
-	ngroup := BuildpackGroup{Group: next}
-	buildpackErr := false
-	for _, group := range bo {
-		// FIXME: double-check slice safety here
-		found, plan, err := group.append(ngroup).detect(done, wg, c)
-		if err == errBuildpack {
-			buildpackErr = true
-		}
-		if err == errFailedDetection || err == errBuildpack {
-			wg = &sync.WaitGroup{}
-			continue
-		}
-		return found, plan, err
-	}
-	if optional {
-		return ngroup.detect(done, wg, c)
-	}
-
-	if buildpackErr {
-		return nil, nil, errBuildpack
-	}
-	return nil, nil, errFailedDetection
-}
-
-func hasID(bps []GroupBuildpack, id string) bool {
-	for _, bp := range bps {
-		if bp.ID == id {
-			return true
-		}
-	}
-	return false
-}
-
 type DetectRun struct {
-	planSections
+	PlanSections
 	Or     planSectionsList `toml:"or"`
 	Output []byte           `toml:"-"`
 	Code   int              `toml:"-"`
 	Err    error            `toml:"-"`
 }
 
-type planSections struct {
+type PlanSections struct {
 	Requires []Require `toml:"requires"`
 	Provides []Provide `toml:"provides"`
 }
 
-func (p *planSections) hasInconsistentVersions() bool {
+func (p *PlanSections) hasInconsistentVersions() bool {
 	for _, req := range p.Requires {
 		if req.hasInconsistentVersions() {
 			return true
@@ -447,7 +309,7 @@ func (p *planSections) hasInconsistentVersions() bool {
 	return false
 }
 
-func (p *planSections) hasDoublySpecifiedVersions() bool {
+func (p *PlanSections) hasDoublySpecifiedVersions() bool {
 	for _, req := range p.Requires {
 		if req.hasDoublySpecifiedVersions() {
 			return true
@@ -456,7 +318,7 @@ func (p *planSections) hasDoublySpecifiedVersions() bool {
 	return false
 }
 
-func (p *planSections) hasTopLevelVersions() bool {
+func (p *PlanSections) hasTopLevelVersions() bool {
 	for _, req := range p.Requires {
 		if req.hasTopLevelVersions() {
 			return true
@@ -465,7 +327,7 @@ func (p *planSections) hasTopLevelVersions() bool {
 	return false
 }
 
-type planSectionsList []planSections
+type planSectionsList []PlanSections
 
 func (p *planSectionsList) hasInconsistentVersions() bool {
 	for _, planSection := range *p {
@@ -492,126 +354,4 @@ func (p *planSectionsList) hasTopLevelVersions() bool {
 		}
 	}
 	return false
-}
-
-type detectResult struct {
-	GroupBuildpack
-	DetectRun
-}
-
-func (r *detectResult) options() []detectOption {
-	var out []detectOption
-	for i, sections := range append([]planSections{r.planSections}, r.Or...) {
-		bp := r.GroupBuildpack
-		bp.Optional = bp.Optional && i == len(r.Or)
-		out = append(out, detectOption{bp, sections})
-	}
-	return out
-}
-
-type detectResults []detectResult
-type trialFunc func(detectTrial) (depMap, detectTrial, error)
-
-func (rs detectResults) runTrials(f trialFunc) (depMap, detectTrial, error) {
-	return rs.runTrialsFrom(nil, f)
-}
-
-func (rs detectResults) runTrialsFrom(prefix detectTrial, f trialFunc) (depMap, detectTrial, error) {
-	if len(rs) == 0 {
-		deps, trial, err := f(prefix)
-		return deps, trial, err
-	}
-
-	var lastErr error
-	for _, option := range rs[0].options() {
-		deps, trial, err := rs[1:].runTrialsFrom(append(prefix, option), f)
-		if err == nil {
-			return deps, trial, nil
-		}
-		lastErr = err
-	}
-	return nil, nil, lastErr
-}
-
-type detectOption struct {
-	GroupBuildpack
-	planSections
-}
-
-type detectTrial []detectOption
-
-func (ts detectTrial) remove(bp GroupBuildpack) detectTrial {
-	var out detectTrial
-	for _, t := range ts {
-		if t.GroupBuildpack != bp {
-			out = append(out, t)
-		}
-	}
-	return out
-}
-
-type depEntry struct {
-	BuildPlanEntry
-	earlyRequires []GroupBuildpack
-	extraProvides []GroupBuildpack
-}
-
-type depMap map[string]depEntry
-
-func newDepMap(trial detectTrial) depMap {
-	m := depMap{}
-	for _, option := range trial {
-		for _, p := range option.Provides {
-			m.provide(option.GroupBuildpack, p)
-		}
-		for _, r := range option.Requires {
-			m.require(option.GroupBuildpack, r)
-		}
-	}
-	return m
-}
-
-func (m depMap) provide(bp GroupBuildpack, provide Provide) {
-	entry := m[provide.Name]
-	entry.extraProvides = append(entry.extraProvides, bp)
-	m[provide.Name] = entry
-}
-
-func (m depMap) require(bp GroupBuildpack, require Require) {
-	entry := m[require.Name]
-	entry.Providers = append(entry.Providers, entry.extraProvides...)
-	entry.extraProvides = nil
-
-	if len(entry.Providers) == 0 {
-		entry.earlyRequires = append(entry.earlyRequires, bp)
-	} else {
-		entry.Requires = append(entry.Requires, require)
-	}
-	m[require.Name] = entry
-}
-
-func (m depMap) eachUnmetProvide(f func(name string, bp GroupBuildpack) error) error {
-	for name, entry := range m {
-		if len(entry.extraProvides) != 0 {
-			for _, bp := range entry.extraProvides {
-				if err := f(name, bp); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
-}
-
-func (m depMap) eachUnmetRequire(f func(name string, bp GroupBuildpack) error) error {
-	for name, entry := range m {
-		if len(entry.earlyRequires) != 0 {
-			for _, bp := range entry.earlyRequires {
-				if err := f(name, bp); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
 }
