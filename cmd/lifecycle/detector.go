@@ -88,16 +88,17 @@ func (da detectArgs) detect() (buildpack.BuildpackGroup, buildpack.BuildPlan, er
 	if err != nil {
 		return buildpack.BuildpackGroup{}, buildpack.BuildPlan{}, cmd.FailErr(err, "read full env")
 	}
-	group, plan, err := order.Detect(&lifecycle.Detector{
-		XConfig: buildpack.DetectConfig{
+	detector := &lifecycle.Detector{
+		DetectConfig: buildpack.DetectConfig{
 			FullEnv:       fullEnv,
 			ClearEnv:      envv.List(),
 			AppDir:        da.appDir,
 			PlatformDir:   da.platformDir,
 			BuildpacksDir: da.buildpacksDir,
+			Logger:        cmd.DefaultLogger,
 		},
-		XLogger: cmd.DefaultLogger,
-	})
+	}
+	group, plan, err := detector.Detect(order)
 	if err != nil {
 		switch err := err.(type) {
 		case *lerrors.Error:

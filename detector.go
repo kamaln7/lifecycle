@@ -20,33 +20,33 @@ var (
 )
 
 type Detector struct {
-	XConfig buildpack.DetectConfig // TODO: figure out what to do about this
-	XLogger Logger
-	runs    *sync.Map
+	buildpack.DetectConfig
 }
 
-func (d *Detector) Config() buildpack.DetectConfig {
-	return d.XConfig
+func (d *Detector) Detect(order buildpack.BuildpackOrder) (buildpack.BuildpackGroup, buildpack.BuildPlan, error) {
+	processor := &Processor{Logger: d.Logger}
+	return order.Detect(&d.DetectConfig, processor)
 }
 
-func (d *Detector) Logger() buildpack.Logger {
-	return d.XLogger
+type Processor struct {
+	Logger Logger
+	runs   *sync.Map
 }
 
-func (d *Detector) Process(done []buildpack.GroupBuildpack) ([]buildpack.GroupBuildpack, []buildpack.BuildPlanEntry, error) {
+func (p *Processor) Process(done []buildpack.GroupBuildpack) ([]buildpack.GroupBuildpack, []buildpack.BuildPlanEntry, error) {
 	var runs []buildpack.DetectRun
 	for _, bp := range done {
-		t, ok := d.runs.Load(bp.String())
+		t, ok := p.runs.Load(bp.String())
 		if !ok {
 			return nil, nil, errors.Errorf("missing detection of '%s'", bp)
 		}
 		run := t.(buildpack.DetectRun)
-		outputLogf := d.XLogger.Debugf
+		outputLogf := p.Logger.Debugf
 
 		switch run.Code {
 		case CodeDetectPass, CodeDetectFail:
 		default:
-			outputLogf = d.XLogger.Infof
+			outputLogf = p.Logger.Infof
 		}
 
 		if len(run.Output) > 0 {
@@ -60,7 +60,7 @@ func (d *Detector) Process(done []buildpack.GroupBuildpack) ([]buildpack.GroupBu
 		runs = append(runs, run)
 	}
 
-	d.XLogger.Debugf("======== Results ========")
+	p.Logger.Debugf("======== Results ========")
 
 	results := detectResults{}
 	detected := true
@@ -69,21 +69,21 @@ func (d *Detector) Process(done []buildpack.GroupBuildpack) ([]buildpack.GroupBu
 		run := runs[i]
 		switch run.Code {
 		case CodeDetectPass:
-			d.XLogger.Debugf("pass: %s", bp)
+			p.Logger.Debugf("pass: %s", bp)
 			results = append(results, detectResult{bp, run})
 		case CodeDetectFail:
 			if bp.Optional {
-				d.XLogger.Debugf("skip: %s", bp)
+				p.Logger.Debugf("skip: %s", bp)
 			} else {
-				d.XLogger.Debugf("fail: %s", bp)
+				p.Logger.Debugf("fail: %s", bp)
 			}
 			detected = detected && bp.Optional
 		case -1:
-			d.XLogger.Infof("err:  %s", bp)
+			p.Logger.Infof("err:  %s", bp)
 			buildpackErr = true
 			detected = detected && bp.Optional
 		default:
-			d.XLogger.Infof("err:  %s (%d)", bp, run.Code)
+			p.Logger.Infof("err:  %s (%d)", bp, run.Code)
 			buildpackErr = true
 			detected = detected && bp.Optional
 		}
@@ -98,14 +98,14 @@ func (d *Detector) Process(done []buildpack.GroupBuildpack) ([]buildpack.GroupBu
 	i := 0
 	deps, trial, err := results.runTrials(func(trial detectTrial) (depMap, detectTrial, error) {
 		i++
-		return d.runTrial(i, trial)
+		return p.runTrial(i, trial)
 	})
 	if err != nil {
 		return nil, nil, err
 	}
 
 	if len(done) != len(trial) {
-		d.XLogger.Infof("%d of %d buildpacks participating", len(trial), len(done))
+		p.Logger.Infof("%d of %d buildpacks participating", len(trial), len(done))
 	}
 
 	maxLength := 0
@@ -119,7 +119,7 @@ func (d *Detector) Process(done []buildpack.GroupBuildpack) ([]buildpack.GroupBu
 	f := fmt.Sprintf("%%-%ds %%s", maxLength)
 
 	for _, t := range trial {
-		d.XLogger.Infof(f, t.ID, t.Version)
+		p.Logger.Infof(f, t.ID, t.Version)
 	}
 
 	var found []buildpack.GroupBuildpack
@@ -133,17 +133,17 @@ func (d *Detector) Process(done []buildpack.GroupBuildpack) ([]buildpack.GroupBu
 	return found, plan, nil
 }
 
-func (d *Detector) Runs() *sync.Map {
-	return d.runs
+func (p *Processor) Runs() *sync.Map {
+	return p.runs
 }
 
-func (d *Detector) SetRuns(runs *sync.Map) {
-	d.runs = runs
+func (p *Processor) SetRuns(runs *sync.Map) {
+	p.runs = runs
 	return
 }
 
-func (d *Detector) runTrial(i int, trial detectTrial) (depMap, detectTrial, error) {
-	d.XLogger.Debugf("Resolving plan... (try #%d)", i)
+func (p *Processor) runTrial(i int, trial detectTrial) (depMap, detectTrial, error) {
+	p.Logger.Debugf("Resolving plan... (try #%d)", i)
 
 	var deps depMap
 	retry := true
@@ -154,10 +154,10 @@ func (d *Detector) runTrial(i int, trial detectTrial) (depMap, detectTrial, erro
 		if err := deps.eachUnmetRequire(func(name string, bp buildpack.GroupBuildpack) error {
 			retry = true
 			if !bp.Optional {
-				d.XLogger.Debugf("fail: %s requires %s", bp, name)
+				p.Logger.Debugf("fail: %s requires %s", bp, name)
 				return errFailedDetection
 			}
-			d.XLogger.Debugf("skip: %s requires %s", bp, name)
+			p.Logger.Debugf("skip: %s requires %s", bp, name)
 			trial = trial.remove(bp)
 			return nil
 		}); err != nil {
@@ -167,10 +167,10 @@ func (d *Detector) runTrial(i int, trial detectTrial) (depMap, detectTrial, erro
 		if err := deps.eachUnmetProvide(func(name string, bp buildpack.GroupBuildpack) error {
 			retry = true
 			if !bp.Optional {
-				d.XLogger.Debugf("fail: %s provides unused %s", bp, name)
+				p.Logger.Debugf("fail: %s provides unused %s", bp, name)
 				return errFailedDetection
 			}
-			d.XLogger.Debugf("skip: %s provides unused %s", bp, name)
+			p.Logger.Debugf("skip: %s provides unused %s", bp, name)
 			trial = trial.remove(bp)
 			return nil
 		}); err != nil {
@@ -179,7 +179,7 @@ func (d *Detector) runTrial(i int, trial detectTrial) (depMap, detectTrial, erro
 	}
 
 	if len(trial) == 0 {
-		d.XLogger.Debugf("fail: no viable buildpacks in group")
+		p.Logger.Debugf("fail: no viable buildpacks in group")
 		return nil, nil, errFailedDetection
 	}
 	return deps, trial, nil

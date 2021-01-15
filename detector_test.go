@@ -28,10 +28,11 @@ func TestDetector(t *testing.T) {
 
 func testDetector(t *testing.T, when spec.G, it spec.S) {
 	var (
-		detector    *lifecycle.Detector
-		platformDir string
-		tmpDir      string
-		logHandler  *memory.Handler
+		detectConfig *buildpack.DetectConfig
+		processor    *lifecycle.Processor
+		platformDir  string
+		tmpDir       string
+		logHandler   *memory.Handler
 	)
 
 	it.Before(func() {
@@ -47,16 +48,16 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 		buildpacksDir := filepath.Join("testdata", "by-id")
 
 		logHandler = memory.New()
-		detector = &lifecycle.Detector{
-			XConfig: buildpack.DetectConfig{
-				FullEnv:       append(os.Environ(), "ENV_TYPE=full"),
-				ClearEnv:      append(os.Environ(), "ENV_TYPE=clear"),
-				AppDir:        appDir,
-				PlatformDir:   platformDir,
-				BuildpacksDir: buildpacksDir,
-			},
-			XLogger: &log.Logger{Handler: logHandler},
+
+		detectConfig = &buildpack.DetectConfig{
+			FullEnv:       append(os.Environ(), "ENV_TYPE=full"),
+			ClearEnv:      append(os.Environ(), "ENV_TYPE=clear"),
+			AppDir:        appDir,
+			PlatformDir:   platformDir,
+			BuildpacksDir: buildpacksDir,
+			Logger:        &log.Logger{Handler: logHandler},
 		}
+		processor = &lifecycle.Processor{Logger: &log.Logger{Handler: logHandler}}
 	})
 
 	it.After(func() {
@@ -66,27 +67,28 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 	mkappfile := func(data string, paths ...string) {
 		t.Helper()
 		for _, p := range paths {
-			h.Mkfile(t, data, filepath.Join(detector.Config().AppDir, p))
+			h.Mkfile(t, data, filepath.Join(detectConfig.AppDir, p))
 		}
 	}
 	toappfile := func(data string, paths ...string) {
 		t.Helper()
 		for _, p := range paths {
-			tofile(t, data, filepath.Join(detector.Config().AppDir, p))
+			tofile(t, data, filepath.Join(detectConfig.AppDir, p))
 		}
 	}
 	rdappfile := func(path string) string {
 		t.Helper()
-		return h.Rdfile(t, filepath.Join(detector.Config().AppDir, path))
+		return h.Rdfile(t, filepath.Join(detectConfig.AppDir, path))
 	}
 
 	when("#Detect", func() {
 		it("should expand order-containing buildpack IDs", func() {
 			mkappfile("100", "detect-status")
 
+			// TODO: change tests to read like detector.Detect(order)
 			_, _, err := buildpack.BuildpackOrder{
 				{Group: []buildpack.GroupBuildpack{{ID: "E", Version: "v1"}}},
-			}.Detect(detector)
+			}.Detect(detectConfig, processor)
 			if err, ok := err.(*errors.Error); !ok || err.Type != errors.ErrTypeFailedDetection {
 				t.Fatalf("Unexpected error:\n%s\n", err)
 			}
@@ -102,7 +104,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 
 			group, plan, err := buildpack.BuildpackOrder{
 				{Group: []buildpack.GroupBuildpack{{ID: "E", Version: "v1"}}},
-			}.Detect(detector)
+			}.Detect(detectConfig, processor)
 			if err != nil {
 				t.Fatalf("Unexpected error:\n%s\n", err)
 			}
@@ -133,7 +135,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 		})
 
 		it("should fail if the group is empty", func() {
-			_, _, err := buildpack.BuildpackOrder([]buildpack.BuildpackGroup{{}}).Detect(detector)
+			_, _, err := buildpack.BuildpackOrder([]buildpack.BuildpackGroup{{}}).Detect(detectConfig, processor)
 			if err, ok := err.(*errors.Error); !ok || err.Type != errors.ErrTypeFailedDetection {
 				t.Fatalf("Unexpected error:\n%s\n", err)
 			}
@@ -154,7 +156,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 					{ID: "A", Version: "v1", Optional: true},
 					{ID: "B", Version: "v1", Optional: true},
 				}},
-			}.Detect(detector)
+			}.Detect(detectConfig, processor)
 			if err, ok := err.(*errors.Error); !ok || err.Type != errors.ErrTypeFailedDetection {
 				t.Fatalf("Unexpected error:\n%s\n", err)
 			}
@@ -179,7 +181,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 					{ID: "A", Version: "v1", Optional: false},
 					{ID: "B", Version: "v1", Optional: false},
 				}},
-			}.Detect(detector)
+			}.Detect(detectConfig, processor)
 			if err, ok := err.(*errors.Error); !ok || err.Type != errors.ErrTypeBuildpack {
 				t.Fatalf("Unexpected error:\n%s\n", err)
 			}
@@ -201,7 +203,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 					{ID: "A", Version: "v1.clear"},
 					{ID: "B", Version: "v1"},
 				},
-			}}.Detect(detector)
+			}}.Detect(detectConfig, processor)
 			if err != nil {
 				t.Fatalf("Unexpected error:\n%s\n", err)
 			}
@@ -223,12 +225,12 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 					{ID: "A", Version: "v1.clear"},
 					{ID: "B", Version: "v2"},
 				},
-			}}.Detect(detector)
+			}}.Detect(detectConfig, processor)
 			if err != nil {
 				t.Fatalf("Unexpected error:\n%s\n", err)
 			}
 
-			bpsDir, err := filepath.Abs(detector.Config().BuildpacksDir)
+			bpsDir, err := filepath.Abs(detectConfig.BuildpacksDir)
 			if err != nil {
 				t.Fatalf("Unexpected error:\n%s\n", err)
 			}
@@ -247,14 +249,14 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 			mkappfile("100", "detect-status")
 			mkappfile("0", "detect-status-A-v1")
 			mkappfile("100", "detect-status-B-v1")
-			detector.XLogger = &log.Logger{Handler: logHandler, Level: log.InfoLevel}
+			detectConfig.Logger = &log.Logger{Handler: logHandler, Level: log.InfoLevel}
 
 			_, _, err := buildpack.BuildpackOrder{
 				{Group: []buildpack.GroupBuildpack{
 					{ID: "A", Version: "v1", Optional: false},
 					{ID: "B", Version: "v1", Optional: false},
 				}},
-			}.Detect(detector)
+			}.Detect(detectConfig, processor)
 			if err, ok := err.(*errors.Error); !ok || err.Type != errors.ErrTypeFailedDetection {
 				t.Fatalf("Unexpected error:\n%s\n", err)
 			}
@@ -268,14 +270,14 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 			mkappfile("100", "detect-status")
 			mkappfile("0", "detect-status-A-v1")
 			mkappfile("127", "detect-status-B-v1")
-			detector.XLogger = &log.Logger{Handler: logHandler, Level: log.InfoLevel}
+			detectConfig.Logger = &log.Logger{Handler: logHandler, Level: log.InfoLevel}
 
 			_, _, err := buildpack.BuildpackOrder{
 				{Group: []buildpack.GroupBuildpack{
 					{ID: "A", Version: "v1", Optional: false},
 					{ID: "B", Version: "v1", Optional: false},
 				}},
-			}.Detect(detector)
+			}.Detect(detectConfig, processor)
 			if err, ok := err.(*errors.Error); !ok || err.Type != errors.ErrTypeBuildpack {
 				t.Fatalf("Unexpected error:\n%s\n", err)
 			}
@@ -310,7 +312,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 						{ID: "D", Version: "v2"},
 						{ID: "B", Version: "v1"},
 					}},
-				}.Detect(detector)
+				}.Detect(detectConfig, processor)
 				if err != nil {
 					t.Fatalf("Unexpected error:\n%s\n", err)
 				}
@@ -373,7 +375,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 						{ID: "B", Version: "v1"},
 						{ID: "C", Version: "v1"},
 					}},
-				}.Detect(detector)
+				}.Detect(detectConfig, processor)
 				if err, ok := err.(*errors.Error); !ok || err.Type != errors.ErrTypeFailedDetection {
 					t.Fatalf("Unexpected error:\n%s\n", err)
 				}
@@ -401,7 +403,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 						{ID: "B", Version: "v1"},
 						{ID: "C", Version: "v1", Optional: true},
 					}},
-				}.Detect(detector)
+				}.Detect(detectConfig, processor)
 				if err, ok := err.(*errors.Error); !ok || err.Type != errors.ErrTypeFailedDetection {
 					t.Fatalf("Unexpected error:\n%s\n", err)
 				}
@@ -430,7 +432,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 						{ID: "B", Version: "v1"},
 						{ID: "C", Version: "v1", Optional: true},
 					}},
-				}.Detect(detector)
+				}.Detect(detectConfig, processor)
 				if err != nil {
 					t.Fatalf("Unexpected error:\n%s\n", err)
 				}
@@ -497,7 +499,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 						{ID: "C", Version: "v1"},
 						{ID: "D", Version: "v1", Optional: true},
 					}},
-				}.Detect(detector)
+				}.Detect(detectConfig, processor)
 				if err != nil {
 					t.Fatalf("Unexpected error:\n%s\n", err)
 				}
@@ -557,7 +559,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 						{ID: "D", Version: "v2"},
 						{ID: "B", Version: "v1"},
 					}},
-				}.Detect(detector)
+				}.Detect(detectConfig, processor)
 				if err != nil {
 					t.Fatalf("Unexpected error:\n%s\n", err)
 				}
@@ -618,7 +620,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 					toappfile("\n[[requires]]\n name = \"dep1\"\n version = \"some-version\"", "detect-plan-D-v2.toml")
 					toappfile("\n[requires.metadata]\n version = \"some-other-version\"", "detect-plan-D-v2.toml")
 
-					detectRun := bpTOML.Detect(detector)
+					detectRun := bpTOML.Detect(detectConfig)
 
 					h.AssertEq(t, detectRun.Code, -1)
 					err = detectRun.Err
@@ -645,7 +647,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 					toappfile("\n[[or.requires]]\n name = \"dep1-present\"\n version = \"some-version\"", "detect-plan-B-v1.toml")
 					toappfile("\n[or.requires.metadata]\n version = \"some-other-version\"", "detect-plan-B-v1.toml")
 
-					detectRun := bpTOML.Detect(detector)
+					detectRun := bpTOML.Detect(detectConfig)
 
 					h.AssertEq(t, detectRun.Code, -1)
 					err = detectRun.Err
@@ -671,7 +673,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 					toappfile("\n[[requires]]\n name = \"dep2\"\n version = \"some-version\"", "detect-plan-A-v1.toml")
 					toappfile("\n[requires.metadata]\n version = \"some-version\"", "detect-plan-A-v1.toml")
 
-					detectRun := bpTOML.Detect(detector)
+					detectRun := bpTOML.Detect(detectConfig)
 
 					h.AssertEq(t, detectRun.Code, -1)
 					err = detectRun.Err
@@ -700,7 +702,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 					toappfile("\n[[or.requires]]\n name = \"dep1-present\"\n version = \"some-version\"", "detect-plan-A-v1.toml")
 					toappfile("\n[or.requires.metadata]\n version = \"some-version\"", "detect-plan-A-v1.toml")
 
-					detectRun := bpTOML.Detect(detector)
+					detectRun := bpTOML.Detect(detectConfig)
 
 					h.AssertEq(t, detectRun.Code, -1)
 					err = detectRun.Err
@@ -725,7 +727,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 					}
 					toappfile("\n[[requires]]\n name = \"dep2\"\n version = \"some-version\"", "detect-plan-A-v1.toml")
 
-					detectRun := bpTOML.Detect(detector)
+					detectRun := bpTOML.Detect(detectConfig)
 
 					h.AssertEq(t, detectRun.Code, 0)
 					err = detectRun.Err
@@ -756,7 +758,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 					toappfile("\n[[or.provides]]\n name = \"dep1-present\"", "detect-plan-A-v1.toml")
 					toappfile("\n[[or.requires]]\n name = \"dep1-present\"\n version = \"some-version\"", "detect-plan-A-v1.toml")
 
-					detectRun := bpTOML.Detect(detector)
+					detectRun := bpTOML.Detect(detectConfig)
 
 					h.AssertEq(t, detectRun.Code, 0)
 					err = detectRun.Err
