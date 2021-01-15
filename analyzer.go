@@ -6,14 +6,16 @@ import (
 	"github.com/buildpacks/imgutil"
 	"github.com/pkg/errors"
 
+	"github.com/buildpacks/lifecycle/api"
 	"github.com/buildpacks/lifecycle/launch"
 )
 
 type Analyzer struct {
-	Buildpacks []GroupBuildpack
-	LayersDir  string
-	Logger     Logger
-	SkipLayers bool
+	Buildpacks  []GroupBuildpack
+	LayersDir   string
+	Logger      Logger
+	SkipLayers  bool
+	PlatformAPI *api.Version
 }
 
 // Analyze restores metadata for launch and cache layers into the layers directory.
@@ -38,15 +40,17 @@ func (a *Analyzer) Analyze(image imgutil.Image, cache Cache) (AnalyzedMetadata, 
 		}
 	}
 
-	restorer := Restorer{
-		LayersDir:  a.LayersDir,
-		Buildpacks: a.Buildpacks,
-		Logger:     a.Logger,
-		SkipLayers: a.SkipLayers,
-	}
+	if a.PlatformAPI.Compare(api.MustParse("0.6")) < 0 { // platform API < 0.6
+		restorer := Restorer{
+			LayersDir:  a.LayersDir,
+			Buildpacks: a.Buildpacks,
+			Logger:     a.Logger,
+			SkipLayers: a.SkipLayers,
+		}
 
-	if err := restorer.analyzeLayers(appMeta, cache); err != nil {
-		return AnalyzedMetadata{}, err
+		if err := restorer.analyzeLayers(appMeta, cache); err != nil {
+			return AnalyzedMetadata{}, err
+		}
 	}
 
 	return AnalyzedMetadata{
