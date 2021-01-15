@@ -1,64 +1,14 @@
-import (
-	"bytes"
-	"io/ioutil"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"sync"
-	"syscall"
+type BuildpackOrder []BuildpackGroup
 
-	"github.com/BurntSushi/toml"
-	"github.com/pkg/errors"
-
-	"github.com/buildpacks/lifecycle/api"
-	lerrors "github.com/buildpacks/lifecycle/errors"
-)
-
-const EnvBuildpackDir = "CNB_BUILDPACK_DIR"
-
-var (
-	errFailedDetection = errors.New("no buildpacks participating")
-	errBuildpack       = errors.New("buildpack(s) failed with err")
-)
-
-type Logger interface {
-	Debug(msg string)
-	Debugf(fmt string, v ...interface{})
-
-	Info(msg string)
-	Infof(fmt string, v ...interface{})
-
-	Warn(msg string)
-	Warnf(fmt string, v ...interface{})
-
-	Error(msg string)
-	Errorf(fmt string, v ...interface{})
-}
-
-type Processor interface {
-	Process(done []GroupBuildpack) ([]GroupBuildpack, []BuildPlanEntry, error)
-	Runs() *sync.Map
-	SetRuns(runs *sync.Map)
-}
-
-type DetectConfig struct {
-	FullEnv       []string
-	ClearEnv      []string
-	AppDir        string
-	PlatformDir   string
-	BuildpacksDir string
-	Logger        Logger
-}
-
-func (bo BuildpackOrder) Detect(config *DetectConfig, processor Processor) (BuildpackGroup, BuildPlan, error) {
-	if processor.Runs() == nil {
-		processor.SetRuns(&sync.Map{})
+func (bo BuildpackOrder) Detect(c *DetectConfig) (BuildpackGroup, BuildPlan, error) {
+	if c.runs == nil {
+		c.runs = &sync.Map{}
 	}
-	bps, entries, err := bo.detect(config, processor, nil, nil, false, &sync.WaitGroup{})
-	if err != nil && err.Error() == errBuildpack.Error() {
-		err = lerrors.NewLifecycleError(err, lerrors.ErrTypeBuildpack)
-	} else if err != nil && err.Error() == errFailedDetection.Error() {
-		err = lerrors.NewLifecycleError(err, lerrors.ErrTypeFailedDetection)
+	bps, entries, err := bo.detect(nil, nil, false, &sync.WaitGroup{}, c)
+	if err == errBuildpack {
+		err = NewLifecycleError(err, ErrTypeBuildpack)
+	} else if err == errFailedDetection {
+		err = NewLifecycleError(err, ErrTypeFailedDetection)
 	}
 	for i := range entries {
 		for j := range entries[i].Requires {
@@ -68,12 +18,12 @@ func (bo BuildpackOrder) Detect(config *DetectConfig, processor Processor) (Buil
 	return BuildpackGroup{Group: bps}, BuildPlan{Entries: entries}, err
 }
 
-func (bo BuildpackOrder) detect(config *DetectConfig, processor Processor, done, next []GroupBuildpack, optional bool, wg *sync.WaitGroup) ([]GroupBuildpack, []BuildPlanEntry, error) {
+func (bo BuildpackOrder) detect(done, next []GroupBuildpack, optional bool, wg *sync.WaitGroup, c *DetectConfig) ([]GroupBuildpack, []BuildPlanEntry, error) {
 	ngroup := BuildpackGroup{Group: next}
 	buildpackErr := false
 	for _, group := range bo {
 		// FIXME: double-check slice safety here
-		found, plan, err := group.append(ngroup).detect(config, processor, done, wg)
+		found, plan, err := group.append(ngroup).detect(done, wg, c)
 		if err == errBuildpack {
 			buildpackErr = true
 		}
@@ -84,70 +34,13 @@ func (bo BuildpackOrder) detect(config *DetectConfig, processor Processor, done,
 		return found, plan, err
 	}
 	if optional {
-		return ngroup.detect(config, processor, done, wg)
+		return ngroup.detect(done, wg, c)
 	}
 
 	if buildpackErr {
 		return nil, nil, errBuildpack
 	}
 	return nil, nil, errFailedDetection
-}
-
-func (bg BuildpackGroup) Detect(config *DetectConfig, processor Processor) (BuildpackGroup, BuildPlan, error) {
-	if processor.Runs() == nil {
-		processor.SetRuns(&sync.Map{})
-	}
-	bps, entries, err := bg.detect(config, processor, nil, &sync.WaitGroup{})
-	if err != nil && err.Error() == errBuildpack.Error() {
-		err = lerrors.NewLifecycleError(err, lerrors.ErrTypeBuildpack)
-	} else if err != nil && err.Error() == errFailedDetection.Error() {
-		err = lerrors.NewLifecycleError(err, lerrors.ErrTypeFailedDetection)
-	}
-	for i := range entries {
-		for j := range entries[i].Requires {
-			entries[i].Requires[j].convertVersionToMetadata()
-		}
-	}
-	return BuildpackGroup{Group: bps}, BuildPlan{Entries: entries}, err
-}
-
-func (bg BuildpackGroup) detect(config *DetectConfig, processor Processor, done []GroupBuildpack, wg *sync.WaitGroup) ([]GroupBuildpack, []BuildPlanEntry, error) {
-	for i, bp := range bg.Group {
-		key := bp.String()
-		if hasID(done, bp.ID) {
-			continue
-		}
-		info, err := bp.Lookup(config.BuildpacksDir)
-		if err != nil {
-			return nil, nil, err
-		}
-		bp.API = info.API
-		bp.Homepage = info.Buildpack.Homepage
-		if info.Order != nil {
-			// TODO: double-check slice safety here
-			// FIXME: cyclical references lead to infinite recursion
-			return info.Order.detect(config, processor, done, bg.Group[i+1:], bp.Optional, wg)
-		}
-		done = append(done, bp)
-		wg.Add(1)
-		go func() {
-			if _, ok := processor.Runs().Load(key); !ok {
-				processor.Runs().Store(key, info.Detect(config))
-			}
-			wg.Done()
-		}()
-	}
-
-	wg.Wait()
-
-	return processor.Process(done)
-}
-
-func (bg BuildpackGroup) append(group ...BuildpackGroup) BuildpackGroup {
-	for _, g := range group {
-		bg.Group = append(bg.Group, g.Group...)
-	}
-	return bg
 }
 
 func hasID(bps []GroupBuildpack, id string) bool {
@@ -159,12 +52,73 @@ func hasID(bps []GroupBuildpack, id string) bool {
 	return false
 }
 
-func (b *BuildpackTOML) Detect(config *DetectConfig) DetectRun { // TODO: config should be a pointer
-	appDir, err := filepath.Abs(config.AppDir)
+type BuildpackGroup struct {
+	Group []GroupBuildpack `toml:"group"`
+}
+
+func (bg BuildpackGroup) Detect(c *DetectConfig) (BuildpackGroup, BuildPlan, error) {
+	if c.runs == nil {
+		c.runs = &sync.Map{}
+	}
+	bps, entries, err := bg.detect(nil, &sync.WaitGroup{}, c)
+	if err == errBuildpack {
+		err = NewLifecycleError(err, ErrTypeBuildpack)
+	} else if err == errFailedDetection {
+		err = NewLifecycleError(err, ErrTypeFailedDetection)
+	}
+	for i := range entries {
+		for j := range entries[i].Requires {
+			entries[i].Requires[j].convertVersionToMetadata()
+		}
+	}
+	return BuildpackGroup{Group: bps}, BuildPlan{Entries: entries}, err
+}
+
+func (bg BuildpackGroup) detect(done []GroupBuildpack, wg *sync.WaitGroup, c *DetectConfig) ([]GroupBuildpack, []BuildPlanEntry, error) {
+	for i, bp := range bg.Group {
+		key := bp.String()
+		if hasID(done, bp.ID) {
+			continue
+		}
+		info, err := bp.Lookup(c.BuildpacksDir)
+		if err != nil {
+			return nil, nil, err
+		}
+		bp.API = info.API
+		bp.Homepage = info.Buildpack.Homepage
+		if info.Order != nil {
+			// TODO: double-check slice safety here
+			// FIXME: cyclical references lead to infinite recursion
+			return info.Order.detect(done, bg.Group[i+1:], bp.Optional, wg, c)
+		}
+		done = append(done, bp)
+		wg.Add(1)
+		go func() {
+			if _, ok := c.runs.Load(key); !ok {
+				c.runs.Store(key, info.Detect(c))
+			}
+			wg.Done()
+		}()
+	}
+
+	wg.Wait()
+
+	return c.process(done)
+}
+
+func (bg BuildpackGroup) append(group ...BuildpackGroup) BuildpackGroup {
+	for _, g := range group {
+		bg.Group = append(bg.Group, g.Group...)
+	}
+	return bg
+}
+
+func (b *BuildpackTOML) Detect(c *DetectConfig) DetectRun {
+	appDir, err := filepath.Abs(c.AppDir)
 	if err != nil {
 		return DetectRun{Code: -1, Err: err}
 	}
-	platformDir, err := filepath.Abs(config.PlatformDir)
+	platformDir, err := filepath.Abs(c.PlatformDir)
 	if err != nil {
 		return DetectRun{Code: -1, Err: err}
 	}
@@ -188,9 +142,9 @@ func (b *BuildpackTOML) Detect(config *DetectConfig) DetectRun { // TODO: config
 	cmd.Dir = appDir
 	cmd.Stdout = out
 	cmd.Stderr = out
-	cmd.Env = config.FullEnv
+	cmd.Env = c.FullEnv
 	if b.Buildpack.ClearEnv {
-		cmd.Env = config.ClearEnv
+		cmd.Env = c.ClearEnv
 	}
 	cmd.Env = append(cmd.Env, EnvBuildpackDir+"="+b.Dir)
 
@@ -220,7 +174,7 @@ func (b *BuildpackTOML) Detect(config *DetectConfig) DetectRun { // TODO: config
 	}
 	if api.MustParse(b.API).Compare(api.MustParse("0.3")) >= 0 {
 		if t.hasTopLevelVersions() || t.Or.hasTopLevelVersions() {
-			config.Logger.Warnf(`Warning: buildpack %s has a "version" key. This key is deprecated in build plan requirements in buildpack API 0.3. "metadata.version" should be used instead`, b.Buildpack.ID)
+			c.Logger.Warnf(`Warning: buildpack %s has a "version" key. This key is deprecated in build plan requirements in buildpack API 0.3. "metadata.version" should be used instead`, b.Buildpack.ID)
 		}
 	}
 	t.Output = out.Bytes()
