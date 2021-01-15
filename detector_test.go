@@ -11,7 +11,7 @@ import (
 	"github.com/buildpacks/lifecycle"
 
 	"github.com/buildpacks/lifecycle/buildpack"
-	"github.com/buildpacks/lifecycle/errors"
+	lerrors "github.com/buildpacks/lifecycle/errors"
 
 	"github.com/apex/log"
 	"github.com/apex/log/handlers/memory"
@@ -89,7 +89,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 			_, _, err := buildpack.BuildpackOrder{
 				{Group: []buildpack.GroupBuildpack{{ID: "E", Version: "v1"}}},
 			}.Detect(detectConfig, processor)
-			if err, ok := err.(*errors.Error); !ok || err.Type != errors.ErrTypeFailedDetection {
+			if err, ok := err.(*lerrors.Error); !ok || err.Type != lerrors.ErrTypeFailedDetection {
 				t.Fatalf("Unexpected error:\n%s\n", err)
 			}
 
@@ -136,7 +136,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 
 		it("should fail if the group is empty", func() {
 			_, _, err := buildpack.BuildpackOrder([]buildpack.BuildpackGroup{{}}).Detect(detectConfig, processor)
-			if err, ok := err.(*errors.Error); !ok || err.Type != errors.ErrTypeFailedDetection {
+			if err, ok := err.(*lerrors.Error); !ok || err.Type != lerrors.ErrTypeFailedDetection {
 				t.Fatalf("Unexpected error:\n%s\n", err)
 			}
 
@@ -157,7 +157,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 					{ID: "B", Version: "v1", Optional: true},
 				}},
 			}.Detect(detectConfig, processor)
-			if err, ok := err.(*errors.Error); !ok || err.Type != errors.ErrTypeFailedDetection {
+			if err, ok := err.(*lerrors.Error); !ok || err.Type != lerrors.ErrTypeFailedDetection {
 				t.Fatalf("Unexpected error:\n%s\n", err)
 			}
 
@@ -182,7 +182,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 					{ID: "B", Version: "v1", Optional: false},
 				}},
 			}.Detect(detectConfig, processor)
-			if err, ok := err.(*errors.Error); !ok || err.Type != errors.ErrTypeBuildpack {
+			if err, ok := err.(*lerrors.Error); !ok || err.Type != lerrors.ErrTypeBuildpack {
 				t.Fatalf("Unexpected error:\n%s\n", err)
 			}
 
@@ -257,7 +257,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 					{ID: "B", Version: "v1", Optional: false},
 				}},
 			}.Detect(detectConfig, processor)
-			if err, ok := err.(*errors.Error); !ok || err.Type != errors.ErrTypeFailedDetection {
+			if err, ok := err.(*lerrors.Error); !ok || err.Type != lerrors.ErrTypeFailedDetection {
 				t.Fatalf("Unexpected error:\n%s\n", err)
 			}
 
@@ -278,7 +278,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 					{ID: "B", Version: "v1", Optional: false},
 				}},
 			}.Detect(detectConfig, processor)
-			if err, ok := err.(*errors.Error); !ok || err.Type != errors.ErrTypeBuildpack {
+			if err, ok := err.(*lerrors.Error); !ok || err.Type != lerrors.ErrTypeBuildpack {
 				t.Fatalf("Unexpected error:\n%s\n", err)
 			}
 
@@ -376,7 +376,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 						{ID: "C", Version: "v1"},
 					}},
 				}.Detect(detectConfig, processor)
-				if err, ok := err.(*errors.Error); !ok || err.Type != errors.ErrTypeFailedDetection {
+				if err, ok := err.(*lerrors.Error); !ok || err.Type != lerrors.ErrTypeFailedDetection {
 					t.Fatalf("Unexpected error:\n%s\n", err)
 				}
 
@@ -404,7 +404,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 						{ID: "C", Version: "v1", Optional: true},
 					}},
 				}.Detect(detectConfig, processor)
-				if err, ok := err.(*errors.Error); !ok || err.Type != errors.ErrTypeFailedDetection {
+				if err, ok := err.(*lerrors.Error); !ok || err.Type != lerrors.ErrTypeFailedDetection {
 					t.Fatalf("Unexpected error:\n%s\n", err)
 				}
 

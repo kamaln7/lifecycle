@@ -57,9 +57,9 @@ func (bo BuildpackOrder) Detect(config *DetectConfig, processor Processor) (Buil
 		processor.SetRuns(&sync.Map{})
 	}
 	bps, entries, err := bo.detect(config, processor, nil, nil, false, &sync.WaitGroup{})
-	if err == errBuildpack {
+	if err != nil && err.Error() == errBuildpack.Error() {
 		err = lerrors.NewLifecycleError(err, lerrors.ErrTypeBuildpack)
-	} else if err == errFailedDetection {
+	} else if err != nil && err.Error() == errFailedDetection.Error() {
 		err = lerrors.NewLifecycleError(err, lerrors.ErrTypeFailedDetection)
 	}
 	for i := range entries {
@@ -100,9 +100,9 @@ func (bg BuildpackGroup) Detect(config *DetectConfig, processor Processor) (Buil
 		processor.SetRuns(&sync.Map{})
 	}
 	bps, entries, err := bg.detect(config, processor, nil, &sync.WaitGroup{})
-	if err == errBuildpack {
+	if err != nil && err.Error() == errBuildpack.Error() {
 		err = lerrors.NewLifecycleError(err, lerrors.ErrTypeBuildpack)
-	} else if err == errFailedDetection {
+	} else if err != nil && err.Error() == errFailedDetection.Error() {
 		err = lerrors.NewLifecycleError(err, lerrors.ErrTypeFailedDetection)
 	}
 	for i := range entries {
