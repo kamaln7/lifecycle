@@ -155,7 +155,7 @@ func (c *createCmd) Exec() error {
 			skipLayers:  c.skipRestore,
 			useDaemon:   c.useDaemon,
 			docker:      c.docker,
-		}.analyze(lifecycle.BuildpackGroup{}, cacheStore)
+		}.analyze(lifecycle.BuildpackGroup{}, nil)
 		if err != nil {
 			return err
 		}

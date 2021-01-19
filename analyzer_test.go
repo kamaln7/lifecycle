@@ -105,7 +105,7 @@ func testAnalyzer(t *testing.T, when spec.G, it spec.S) {
 				})
 
 				it("does not restore layer metadata", func() {
-					_, err := analyzer.Analyze(image, testCache)
+					_, err := analyzer.Analyze(image, nil)
 					h.AssertNil(t, err)
 
 					for _, paths := range []string{
@@ -119,7 +119,7 @@ func testAnalyzer(t *testing.T, when spec.G, it spec.S) {
 				})
 
 				it("does not restore each store metadata", func() {
-					_, err := analyzer.Analyze(image, testCache)
+					_, err := analyzer.Analyze(image, nil)
 					h.AssertNil(t, err)
 					for _, paths := range []string{
 						// store.toml files.
