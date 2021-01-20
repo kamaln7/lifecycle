@@ -5,9 +5,11 @@
 package testmock
 
 import (
-	buildpack "github.com/buildpacks/lifecycle/buildpack"
-	gomock "github.com/golang/mock/gomock"
 	reflect "reflect"
+
+	gomock "github.com/golang/mock/gomock"
+
+	buildpack "github.com/buildpacks/lifecycle/buildpack"
 )
 
 // MockBuildpackStore is a mock of BuildpackStore interface
