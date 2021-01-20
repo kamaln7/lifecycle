@@ -49,15 +49,17 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 
 		logHandler = memory.New()
 
+		logger := &log.Logger{Handler: logHandler}
+
 		detectConfig = &buildpack.DetectConfig{
 			FullEnv:       append(os.Environ(), "ENV_TYPE=full"),
 			ClearEnv:      append(os.Environ(), "ENV_TYPE=clear"),
 			AppDir:        appDir,
 			PlatformDir:   platformDir,
 			BuildpacksDir: buildpacksDir,
-			Logger:        &log.Logger{Handler: logHandler},
+			Logger:        logger,
 		}
-		processor = &lifecycle.Processor{Logger: &log.Logger{Handler: logHandler}}
+		processor = &lifecycle.Processor{Logger: logger}
 	})
 
 	it.After(func() {
@@ -250,6 +252,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 			mkappfile("0", "detect-status-A-v1")
 			mkappfile("100", "detect-status-B-v1")
 			detectConfig.Logger = &log.Logger{Handler: logHandler, Level: log.InfoLevel}
+			processor.Logger = detectConfig.Logger // TODO: fix
 
 			_, _, err := buildpack.BuildpackOrder{
 				{Group: []buildpack.GroupBuildpack{
@@ -271,6 +274,7 @@ func testDetector(t *testing.T, when spec.G, it spec.S) {
 			mkappfile("0", "detect-status-A-v1")
 			mkappfile("127", "detect-status-B-v1")
 			detectConfig.Logger = &log.Logger{Handler: logHandler, Level: log.InfoLevel}
+			processor.Logger = detectConfig.Logger // TODO: fix
 
 			_, _, err := buildpack.BuildpackOrder{
 				{Group: []buildpack.GroupBuildpack{
